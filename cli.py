@@ -36,7 +36,7 @@ _SUBCOMMANDS = [
 ]
 
 # Subcommands with real implementations (not stubs).
-_IMPLEMENTED = {"geo-import", "terrain-setup", "citygml-import", "ndvi-scatter", "waypoints-to-camera"}
+_IMPLEMENTED = {"geo-import", "terrain-setup", "citygml-import", "ndvi-scatter", "waypoints-to-camera", "world-setup"}
 
 
 def _stub(name: str) -> None:
@@ -478,6 +478,58 @@ def _run_waypoints_to_camera(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_world_setup_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+    """Register the world-setup subcommand parser."""
+    p = subparsers.add_parser(
+        "world-setup",
+        help="Configure sky + atmosphere + clouds (must run inside Blender).",
+    )
+    p.add_argument(
+        "--preset",
+        choices=["airbus-clean", "client-default", "spacex-warm"],
+        default="client-default",
+        help="Named aesthetic preset. Default: client-default.",
+    )
+    p.add_argument(
+        "--bbox",
+        nargs=3,
+        type=float,
+        metavar=("X", "Y", "Z"),
+        default=None,
+        help="Flight-path bounding box in metres (X Y Z) for the domain-cube haze volume.",
+    )
+
+
+def _run_world_setup(args: argparse.Namespace) -> int:
+    """Dispatch the world-setup subcommand.
+
+    If not running under bpy, print a helpful message explaining how to invoke
+    via blender --background. Otherwise, call the world_setup functions directly.
+    """
+    if "bpy" not in sys.modules:
+        print(
+            "[blender-tools] world-setup must run inside Blender; "
+            "invoke via `blender --background --python -c '...'`.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Running inside Blender — dispatch directly.
+    from blender_tools.world_setup import setup_multiple_scattering_sky, add_domain_cube_volume
+
+    world = setup_multiple_scattering_sky(preset=args.preset)
+    print(f"[blender-tools] World '{world.name}' configured with preset '{args.preset}'.")
+
+    if args.bbox is not None:
+        cube = add_domain_cube_volume(
+            bbox_meters=(args.bbox[0], args.bbox[1], args.bbox[2]),
+            preset=args.preset,
+        )
+        print(f"[blender-tools] Domain-cube haze object '{cube.name}' added.")
+
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="blender-tools",
@@ -492,6 +544,7 @@ def main(argv: list[str] | None = None) -> int:
     _build_citygml_import_parser(subparsers)
     _build_ndvi_scatter_parser(subparsers)
     _build_waypoints_to_camera_parser(subparsers)
+    _build_world_setup_parser(subparsers)
 
     # Register the remaining stub commands as minimal parsers so argparse
     # accepts them before we print the stub message.
@@ -516,6 +569,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "waypoints-to-camera":
         return _run_waypoints_to_camera(args)
+
+    if args.command == "world-setup":
+        return _run_world_setup(args)
 
     # All other commands are stubs.
     _stub(args.command)
