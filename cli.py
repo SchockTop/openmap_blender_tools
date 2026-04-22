@@ -36,7 +36,7 @@ _SUBCOMMANDS = [
 ]
 
 # Subcommands with real implementations (not stubs).
-_IMPLEMENTED = {"geo-import", "terrain-setup", "citygml-import", "ndvi-scatter", "waypoints-to-camera", "world-setup"}
+_IMPLEMENTED = {"geo-import", "terrain-setup", "citygml-import", "ndvi-scatter", "waypoints-to-camera", "world-setup", "step-retessellate", "cleanup-pymeshlab", "hidden-geo-cull"}
 
 
 def _stub(name: str) -> None:
@@ -530,6 +530,154 @@ def _run_world_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_step_retessellate_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+    """Register the step-retessellate subcommand parser."""
+    p = subparsers.add_parser(
+        "step-retessellate",
+        help="Retessellate a STEP file into glTF via OpenCascade.",
+    )
+    p.add_argument(
+        "--input",
+        dest="input",
+        required=True,
+        metavar="PATH",
+        help="Input STEP file (.step / .stp / .stpz).",
+    )
+    p.add_argument(
+        "--output",
+        dest="output",
+        required=True,
+        metavar="PATH",
+        help="Output glTF file path.",
+    )
+    p.add_argument(
+        "--quality",
+        dest="quality",
+        choices=["hero", "mid", "wide", "background"],
+        default="hero",
+        help="Tessellation quality preset. Default: hero.",
+    )
+    p.add_argument(
+        "--no-parallel",
+        dest="no_parallel",
+        action="store_true",
+        default=False,
+        help="Disable parallel tessellation.",
+    )
+    p.add_argument(
+        "--no-clean",
+        dest="no_clean",
+        action="store_true",
+        default=False,
+        help="Skip BRepTools.Clean step before tessellation.",
+    )
+
+
+def _run_step_retessellate(args: argparse.Namespace) -> int:
+    """Dispatch the step-retessellate subcommand."""
+    from blender_tools.step_retessellate import retessellate_step_to_gltf
+
+    try:
+        result = retessellate_step_to_gltf(
+            step_path=Path(args.input),
+            output_gltf=Path(args.output),
+            quality=args.quality,
+            parallel=not args.no_parallel,
+            clean_model=not args.no_clean,
+        )
+        print(f"[blender-tools] glTF written to: {result}")
+        return 0
+    except NotImplementedError:
+        print(
+            "[blender-tools] STEP→glTF is scaffolded; full OCCT glTF-write "
+            "implementation is tracked as follow-up.",
+            file=sys.stderr,
+        )
+        return 2
+
+
+def _build_cleanup_pymeshlab_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+    """Register the cleanup-pymeshlab subcommand parser."""
+    p = subparsers.add_parser(
+        "cleanup-pymeshlab",
+        help="Run mesh hygiene filter chain on a glTF/OBJ/STL via pymeshlab.",
+    )
+    p.add_argument(
+        "--input",
+        dest="input",
+        required=True,
+        metavar="PATH",
+        help="Input mesh file (.obj / .ply / .stl / .glb / .gltf).",
+    )
+    p.add_argument(
+        "--output",
+        dest="output",
+        required=True,
+        metavar="PATH",
+        help="Output mesh file path.",
+    )
+
+
+def _run_cleanup_pymeshlab(args: argparse.Namespace) -> int:
+    """Dispatch the cleanup-pymeshlab subcommand."""
+    from blender_tools.cleanup_pymeshlab import clean_cad_mesh
+
+    result = clean_cad_mesh(
+        input_mesh=Path(args.input),
+        output_mesh=Path(args.output),
+    )
+    print(f"[blender-tools] Cleaned mesh written to: {result}")
+    return 0
+
+
+def _build_hidden_geo_cull_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+    """Register the hidden-geo-cull subcommand parser."""
+    p = subparsers.add_parser(
+        "hidden-geo-cull",
+        help="Cull hidden interior geometry from a .blend (must run inside Blender).",
+    )
+    p.add_argument(
+        "--mode",
+        choices=["name", "render-face-id"],
+        default="name",
+        help="Culling strategy: 'name' (regex on object names) or "
+             "'render-face-id' (face visibility from sample cameras). Default: name.",
+    )
+    p.add_argument(
+        "--patterns",
+        dest="patterns",
+        nargs="+",
+        metavar="PAT",
+        default=None,
+        help="Override default name patterns (regex strings). Only used in name mode.",
+    )
+    p.add_argument(
+        "--n-cameras",
+        dest="n_cameras",
+        type=int,
+        default=20,
+        metavar="N",
+        help="[render-face-id mode] Number of sample cameras on sphere. Default: 20.",
+    )
+
+
+def _run_hidden_geo_cull(args: argparse.Namespace) -> int:
+    """Dispatch the hidden-geo-cull subcommand."""
+    if args.mode == "name":
+        from blender_tools.hidden_geo_cull import cull_by_name_pattern
+
+        moved = cull_by_name_pattern(patterns=args.patterns)
+        print(f"[blender-tools] {moved} object(s) moved to hidden collection.")
+        return 0
+
+    # render-face-id mode
+    from blender_tools.hidden_geo_cull import cull_by_render_face_id_visibility
+
+    deleted = cull_by_render_face_id_visibility(n_sample_cameras=args.n_cameras)
+    print(f"[blender-tools] {deleted} face(s) deleted (scaffold: always 0).")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="blender-tools",
@@ -545,8 +693,11 @@ def main(argv: list[str] | None = None) -> int:
     _build_ndvi_scatter_parser(subparsers)
     _build_waypoints_to_camera_parser(subparsers)
     _build_world_setup_parser(subparsers)
+    _build_step_retessellate_parser(subparsers)
+    _build_cleanup_pymeshlab_parser(subparsers)
+    _build_hidden_geo_cull_parser(subparsers)
 
-    # Register the remaining stub commands as minimal parsers so argparse
+    # Register any remaining stub commands as minimal parsers so argparse
     # accepts them before we print the stub message.
     _STUB_COMMANDS = [cmd for cmd in _SUBCOMMANDS if cmd not in _IMPLEMENTED]
     for cmd in _STUB_COMMANDS:
@@ -572,6 +723,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "world-setup":
         return _run_world_setup(args)
+
+    if args.command == "step-retessellate":
+        return _run_step_retessellate(args)
+
+    if args.command == "cleanup-pymeshlab":
+        return _run_cleanup_pymeshlab(args)
+
+    if args.command == "hidden-geo-cull":
+        return _run_hidden_geo_cull(args)
 
     # All other commands are stubs.
     _stub(args.command)
