@@ -36,7 +36,7 @@ _SUBCOMMANDS = [
 ]
 
 # Subcommands with real implementations (not stubs).
-_IMPLEMENTED = {"geo-import"}
+_IMPLEMENTED = {"geo-import", "terrain-setup"}
 
 
 def _stub(name: str) -> None:
@@ -104,6 +104,108 @@ def _build_geo_import_parser(subparsers: argparse._SubParsersAction) -> None:  #
     )
 
 
+def _build_terrain_setup_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+    """Register the terrain-setup subcommand parser."""
+    p = subparsers.add_parser(
+        "terrain-setup",
+        help="Build Blender terrain from EXR heightmap (must run inside Blender).",
+    )
+    p.add_argument(
+        "--heightmap",
+        required=True,
+        metavar="PATH",
+        help="Path to the 32-bit float EXR heightmap.",
+    )
+    p.add_argument(
+        "--size",
+        nargs=2,
+        type=float,
+        required=True,
+        metavar=("X", "Y"),
+        help="Terrain size in metres (X Y).",
+    )
+    p.add_argument(
+        "--subdivisions",
+        type=int,
+        default=11,
+        metavar="N",
+        help="Subsurf Simple subdivision level [0–14]. Default: 11.",
+    )
+    p.add_argument(
+        "--anchor",
+        nargs=3,
+        type=float,
+        default=[0.0, 0.0, 0.0],
+        metavar=("X", "Y", "Z"),
+        help="UTM32N anchor (easting northing altitude) subtracted from world coords. "
+             "Default: 0 0 0.",
+    )
+    p.add_argument(
+        "--strength",
+        type=float,
+        default=1.0,
+        metavar="F",
+        help="Displace modifier strength (metres per unit). Default: 1.0.",
+    )
+    p.add_argument(
+        "--blend-out",
+        dest="blend_out",
+        metavar="PATH",
+        default=None,
+        help="If given, save the resulting .blend file to this path.",
+    )
+
+
+def _run_terrain_setup(args: argparse.Namespace) -> int:
+    """Dispatch the terrain-setup subcommand.
+
+    If bpy is already in sys.modules (i.e. we are running inside Blender),
+    call build_terrain_from_heightmap directly.  Otherwise, print a helpful
+    message explaining how to invoke via blender --background.
+    """
+    if "bpy" not in sys.modules:
+        print(
+            "[blender-tools] terrain-setup requires Blender's bundled Python.\n"
+            "Run it as:\n"
+            "  blender --background --factory-startup --python -c \"\n"
+            "  import sys; sys.path.insert(0, '<repo>/research_bot')\n"
+            "  from blender_tools.terrain_setup import build_terrain_from_heightmap\n"
+            "  build_terrain_from_heightmap(\n"
+            f"      heightmap_exr='{args.heightmap}',\n"
+            f"      size_meters=({args.size[0]}, {args.size[1]}),\n"
+            f"      subdivisions={args.subdivisions},\n"
+            f"      anchor_utm32n=({args.anchor[0]}, {args.anchor[1]}, {args.anchor[2]}),\n"
+            f"      strength={args.strength},\n"
+            "  )\n"
+            + (
+                f"  import bpy; bpy.ops.wm.save_as_mainfile(filepath='{args.blend_out}')\n"
+                if args.blend_out else ""
+            )
+            + "  \"",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Running inside Blender — dispatch directly.
+    from blender_tools.terrain_setup import build_terrain_from_heightmap
+    import bpy  # type: ignore[import-not-found]
+
+    obj = build_terrain_from_heightmap(
+        heightmap_exr=args.heightmap,
+        size_meters=(args.size[0], args.size[1]),
+        subdivisions=args.subdivisions,
+        strength=args.strength,
+        anchor_utm32n=(args.anchor[0], args.anchor[1], args.anchor[2]),
+    )
+    print(f"[blender-tools] Terrain object '{obj.name}' created.")
+
+    if args.blend_out:
+        bpy.ops.wm.save_as_mainfile(filepath=str(Path(args.blend_out).resolve()))
+        print(f"[blender-tools] Saved .blend to: {args.blend_out}")
+
+    return 0
+
+
 def _run_geo_import(args: argparse.Namespace) -> int:
     """Dispatch the geo-import subcommand to the real implementation."""
     from blender_tools.geo_import import dgm_tif_to_exr_heightmap, dop_to_udim_tiles
@@ -157,10 +259,11 @@ def main(argv: list[str] | None = None) -> int:
     subparsers = parser.add_subparsers(dest="command", metavar="command")
     subparsers.required = True
 
-    # Register geo-import with a real parser.
+    # Register implemented commands with real parsers.
     _build_geo_import_parser(subparsers)
+    _build_terrain_setup_parser(subparsers)
 
-    # Register the remaining 8 commands as minimal stub parsers so argparse
+    # Register the remaining stub commands as minimal parsers so argparse
     # accepts them before we print the stub message.
     _STUB_COMMANDS = [cmd for cmd in _SUBCOMMANDS if cmd not in _IMPLEMENTED]
     for cmd in _STUB_COMMANDS:
@@ -171,6 +274,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "geo-import":
         # Re-parse strictly with only the geo-import subparser to get proper errors.
         return _run_geo_import(args)
+
+    if args.command == "terrain-setup":
+        return _run_terrain_setup(args)
 
     # All other commands are stubs.
     _stub(args.command)
