@@ -36,7 +36,7 @@ _SUBCOMMANDS = [
 ]
 
 # Subcommands with real implementations (not stubs).
-_IMPLEMENTED = {"geo-import", "terrain-setup", "citygml-import", "ndvi-scatter"}
+_IMPLEMENTED = {"geo-import", "terrain-setup", "citygml-import", "ndvi-scatter", "waypoints-to-camera"}
 
 
 def _stub(name: str) -> None:
@@ -401,6 +401,83 @@ def _run_ndvi_scatter(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_waypoints_to_camera_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+    """Register the waypoints-to-camera subcommand parser."""
+    p = subparsers.add_parser(
+        "waypoints-to-camera",
+        help="Build Bezier camera path from WGS84 waypoint CSV (must run inside Blender).",
+    )
+    p.add_argument(
+        "--csv",
+        dest="csv",
+        required=True,
+        metavar="PATH",
+        help="Path to the WGS84 waypoints CSV (columns: lat, lon, alt).",
+    )
+    p.add_argument(
+        "--anchor",
+        nargs=3,
+        type=float,
+        default=[0.0, 0.0, 0.0],
+        metavar=("X", "Y", "Z"),
+        help="UTM32N anchor (easting northing altitude) subtracted from world coords. "
+             "Default: 0 0 0.",
+    )
+    p.add_argument(
+        "--speed",
+        dest="speed",
+        type=float,
+        default=50.0,
+        metavar="F",
+        help="Camera travel speed in m/s. Default: 50.0.",
+    )
+    p.add_argument(
+        "--fps",
+        dest="fps",
+        type=int,
+        default=25,
+        metavar="N",
+        help="Scene frame rate. Default: 25.",
+    )
+
+
+def _run_waypoints_to_camera(args: argparse.Namespace) -> int:
+    """Dispatch the waypoints-to-camera subcommand.
+
+    If not running under bpy, print a helpful message explaining how to invoke
+    via blender --background. Otherwise, call wgs84_csv_to_bezier directly.
+    """
+    if "bpy" not in sys.modules:
+        print(
+            "[blender-tools] waypoints-to-camera requires Blender's bundled Python.\n"
+            "Run it as:\n"
+            "  blender --background --factory-startup --python -c \"\n"
+            "  import sys; sys.path.insert(0, '<repo>/research_bot')\n"
+            "  from blender_tools.waypoints_to_camera import wgs84_csv_to_bezier\n"
+            "  wgs84_csv_to_bezier(\n"
+            f"      csv_path='{args.csv}',\n"
+            f"      anchor_utm32n=({args.anchor[0]}, {args.anchor[1]}, {args.anchor[2]}),\n"
+            f"      speed_mps={args.speed},\n"
+            f"      fps={args.fps},\n"
+            "  )\n"
+            "  \"",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Running inside Blender — dispatch directly.
+    from blender_tools.waypoints_to_camera import wgs84_csv_to_bezier
+
+    curve_obj = wgs84_csv_to_bezier(
+        csv_path=args.csv,
+        anchor_utm32n=(args.anchor[0], args.anchor[1], args.anchor[2]),
+        speed_mps=args.speed,
+        fps=args.fps,
+    )
+    print(f"[blender-tools] Bezier curve '{curve_obj.name}' created.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="blender-tools",
@@ -414,6 +491,7 @@ def main(argv: list[str] | None = None) -> int:
     _build_terrain_setup_parser(subparsers)
     _build_citygml_import_parser(subparsers)
     _build_ndvi_scatter_parser(subparsers)
+    _build_waypoints_to_camera_parser(subparsers)
 
     # Register the remaining stub commands as minimal parsers so argparse
     # accepts them before we print the stub message.
@@ -435,6 +513,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "ndvi-scatter":
         return _run_ndvi_scatter(args)
+
+    if args.command == "waypoints-to-camera":
+        return _run_waypoints_to_camera(args)
 
     # All other commands are stubs.
     _stub(args.command)
