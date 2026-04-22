@@ -32,3 +32,8 @@ blender-tools = "blender_tools.cli:main"
 [tool.setuptools]
 packages = ["blender_tools", "blender_tools.tests"]
 package-dir = { "" = "." }
+
+[tool.pytest.ini_options]
+markers = [
+  "needs_gdal: marks tests that require the GDAL CLI to be installed (deselect with -m 'not needs_gdal')",
+]
