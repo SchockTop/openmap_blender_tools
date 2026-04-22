@@ -36,7 +36,7 @@ _SUBCOMMANDS = [
 ]
 
 # Subcommands with real implementations (not stubs).
-_IMPLEMENTED = {"geo-import", "terrain-setup"}
+_IMPLEMENTED = {"geo-import", "terrain-setup", "citygml-import", "ndvi-scatter"}
 
 
 def _stub(name: str) -> None:
@@ -251,6 +251,156 @@ def _run_geo_import(args: argparse.Namespace) -> int:
     return 0
 
 
+def _build_citygml_import_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+    """Register the citygml-import subcommand parser."""
+    p = subparsers.add_parser(
+        "citygml-import",
+        help="Convert LoD2 CityGML to CityJSON via citygml-tools.",
+    )
+    p.add_argument(
+        "--input",
+        dest="input",
+        nargs="+",
+        required=True,
+        metavar="GML",
+        help="One or more input CityGML (.gml) file paths.",
+    )
+    p.add_argument(
+        "--output",
+        dest="output",
+        required=True,
+        metavar="JSON",
+        help="Destination CityJSON output file path.",
+    )
+    p.add_argument(
+        "--docker",
+        dest="docker",
+        action="store_true",
+        default=False,
+        help="Use Docker fallback (citygml4j/citygml-tools image) instead of local CLI.",
+    )
+
+
+def _run_citygml_import(args: argparse.Namespace) -> int:
+    """Dispatch the citygml-import subcommand."""
+    from blender_tools.citygml_import import gml_to_cityjson
+
+    input_gmls = [Path(p) for p in args.input]
+    output_json = Path(args.output)
+    result = gml_to_cityjson(input_gmls, output_json, use_docker=args.docker)
+    print(f"[blender-tools] CityJSON written to: {result}")
+    return 0
+
+
+def _build_ndvi_scatter_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+    """Register the ndvi-scatter subcommand parser."""
+    p = subparsers.add_parser(
+        "ndvi-scatter",
+        help="Compute NDVI or generate Geometry-Nodes density config from NDVI raster.",
+    )
+    p.add_argument(
+        "--mode",
+        choices=["compute", "config"],
+        required=True,
+        help="'compute': run gdal_calc.py to produce NDVI GeoTIFF. "
+             "'config': print GN density config JSON for an existing NDVI GeoTIFF.",
+    )
+    # compute-mode args
+    p.add_argument(
+        "--red",
+        dest="red",
+        metavar="PATH",
+        help="[compute mode] Red-band GeoTIFF path.",
+    )
+    p.add_argument(
+        "--nir",
+        dest="nir",
+        metavar="PATH",
+        help="[compute mode] NIR-band GeoTIFF path.",
+    )
+    p.add_argument(
+        "--output",
+        dest="output",
+        metavar="PATH",
+        help="[compute mode] Output NDVI GeoTIFF path.",
+    )
+    # config-mode args
+    p.add_argument(
+        "--ndvi",
+        dest="ndvi",
+        metavar="PATH",
+        help="[config mode] Path to the NDVI GeoTIFF.",
+    )
+    p.add_argument(
+        "--threshold-low",
+        dest="threshold_low",
+        type=float,
+        default=0.2,
+        metavar="F",
+        help="[config mode] Lower NDVI threshold (density=0 below this). Default: 0.2.",
+    )
+    p.add_argument(
+        "--threshold-high",
+        dest="threshold_high",
+        type=float,
+        default=0.8,
+        metavar="F",
+        help="[config mode] Upper NDVI threshold (density=max above this). Default: 0.8.",
+    )
+    p.add_argument(
+        "--max-density",
+        dest="max_density",
+        type=float,
+        default=0.5,
+        metavar="F",
+        help="[config mode] Max scatter density in points/m². Default: 0.5.",
+    )
+    p.add_argument(
+        "--distribution",
+        dest="distribution",
+        choices=["POISSON", "RANDOM"],
+        default="POISSON",
+        help="[config mode] Distribute-Points-on-Faces method. Default: POISSON.",
+    )
+
+
+def _run_ndvi_scatter(args: argparse.Namespace) -> int:
+    """Dispatch the ndvi-scatter subcommand."""
+    import json as _json
+
+    if args.mode == "compute":
+        if not args.red or not args.nir or not args.output:
+            print(
+                "[blender-tools] ndvi-scatter --mode compute requires --red, --nir, --output",
+                file=sys.stderr,
+            )
+            return 1
+        from blender_tools.ndvi_scatter import compute_ndvi
+
+        result = compute_ndvi(Path(args.red), Path(args.nir), Path(args.output))
+        print(f"[blender-tools] NDVI GeoTIFF written to: {result}")
+        return 0
+
+    # config mode
+    if not args.ndvi:
+        print(
+            "[blender-tools] ndvi-scatter --mode config requires --ndvi",
+            file=sys.stderr,
+        )
+        return 1
+    from blender_tools.ndvi_scatter import ndvi_to_density_config
+
+    cfg = ndvi_to_density_config(
+        ndvi_tif=Path(args.ndvi),
+        threshold_low=args.threshold_low,
+        threshold_high=args.threshold_high,
+        max_density_per_m2=args.max_density,
+        distribution_method=args.distribution,
+    )
+    print(_json.dumps(cfg, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="blender-tools",
@@ -262,6 +412,8 @@ def main(argv: list[str] | None = None) -> int:
     # Register implemented commands with real parsers.
     _build_geo_import_parser(subparsers)
     _build_terrain_setup_parser(subparsers)
+    _build_citygml_import_parser(subparsers)
+    _build_ndvi_scatter_parser(subparsers)
 
     # Register the remaining stub commands as minimal parsers so argparse
     # accepts them before we print the stub message.
@@ -277,6 +429,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "terrain-setup":
         return _run_terrain_setup(args)
+
+    if args.command == "citygml-import":
+        return _run_citygml_import(args)
+
+    if args.command == "ndvi-scatter":
+        return _run_ndvi_scatter(args)
 
     # All other commands are stubs.
     _stub(args.command)
