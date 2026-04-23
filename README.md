@@ -3,7 +3,25 @@
 Python package of Blender 5.x pipeline tools for the IR-Unity-Research
 wiki's Thread 3 (data pipeline) + Thread 4 (cinematic) playbooks.
 
-## Install
+## Install — as a Blender Extension (recommended)
+
+One-click, no proxy, no admin, no Python-version juggling:
+
+```bash
+# Build the zip (any Python 3.11+ works; anaconda is fine)
+python build_extension.py
+# → dist/blender_tools-0.1.0.zip  (~55 MB, wheels bundled)
+
+# Install into Blender 4.2+ from the command line
+"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" --command extension install-file --repo user_default --enable dist/blender_tools-0.1.0.zip
+```
+
+Or in the GUI: **Edit → Preferences → Extensions → Install from Disk → `dist/blender_tools-0.1.0.zip`**.
+
+Operators register under the `Blender Tools` submenu in **Add (Shift+A)** in the
+3D Viewport and as `bpy.ops.blender_tools.*` from scripts.
+
+## Install — as a pip package (for development)
 
 ```bash
 cd research_bot/blender_tools

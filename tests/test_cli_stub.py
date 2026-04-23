@@ -27,3 +27,25 @@ def test_cli_unknown_command_errors(capsys):
         cli.main(["no-such-command"])
     # argparse exits with 2 for unknown choices
     assert exc.value.code == 2
+
+
+def test_subcommand_help_survives_cp1252_stdout(monkeypatch):
+    """Regression: --help on subcommands with non-ASCII help text must not
+    crash on Windows where stdout defaults to cp1252.
+
+    Simulates the Windows default by redirecting stdout/stderr through a
+    cp1252-encoded stream. main() must reconfigure to utf-8 (or otherwise
+    tolerate non-ASCII) before argparse writes help.
+    """
+    import io
+    import sys
+
+    cp = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+    monkeypatch.setattr(sys, "stdout", cp)
+    monkeypatch.setattr(sys, "stderr", cp)
+
+    # geo-import help contains U+2192 ("→") — the original failure case.
+    for cmd in ("geo-import", "terrain-setup", "ndvi-scatter", "world-setup"):
+        with pytest.raises(SystemExit) as exc:
+            cli.main([cmd, "--help"])
+        assert exc.value.code == 0, f"{cmd} --help should exit 0"

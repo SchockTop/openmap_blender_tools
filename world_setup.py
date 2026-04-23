@@ -166,12 +166,19 @@ def setup_multiple_scattering_sky(
     output = nodes.new("ShaderNodeOutputWorld")
     bg = nodes.new("ShaderNodeBackground")
     sky = nodes.new("ShaderNodeTexSky")
-    sky.sky_type = "NISHITA"  # fallback for Blender <5.1
-    # 5.1+ preferred type:
-    try:
-        sky.sky_type = "MULTIPLE_SCATTERING"
-    except TypeError:
-        pass  # older blender, Nishita remains
+    # Blender 5.1+ replaced NISHITA with the explicit SINGLE/MULTIPLE_SCATTERING
+    # types. Try the new name first, fall back to NISHITA on <5.1.
+    for candidate in ("MULTIPLE_SCATTERING", "NISHITA"):
+        try:
+            sky.sky_type = candidate
+            break
+        except TypeError:
+            continue
+    else:
+        raise RuntimeError(
+            f"No compatible Sky Texture type found. Blender sky enum: "
+            f"{sky.bl_rna.properties['sky_type'].enum_items.keys()}"
+        )
 
     sky.sun_elevation = values["sun_elevation_rad"]
     sky.sun_rotation = values["sun_rotation_rad"]

@@ -1,0 +1,35 @@
+schema_version = "1.0.0"
+
+id = "blender_tools"
+version = "0.1.0"
+name = "IR-Unity Blender Tools"
+tagline = "Terrain, cinematic & CAD tools for rocket visualisation"
+maintainer = "IR-Unity-Research <h3lium.production@gmail.com>"
+type = "add-on"
+
+blender_version_min = "4.2.0"
+
+license = [
+    "SPDX:LicenseRef-Proprietary",
+]
+
+tags = [
+    "3D View",
+    "Object",
+    "Mesh",
+    "Render",
+]
+
+# Bundled wheels — paths relative to the extension zip root. Blender picks the
+# wheel matching the host Python automatically and installs into an isolated
+# per-extension site-packages dir. No network, no admin, no user-site tricks.
+wheels = [
+    "./wheels/pyproj-3.7.2-cp311-cp311-win_amd64.whl",
+    "./wheels/pyproj-3.7.2-cp312-cp312-win_amd64.whl",
+    "./wheels/pyproj-3.7.2-cp313-cp313-win_amd64.whl",
+    "./wheels/numpy-2.4.4-cp311-cp311-win_amd64.whl",
+    "./wheels/numpy-2.4.4-cp312-cp312-win_amd64.whl",
+    "./wheels/numpy-2.4.4-cp313-cp313-win_amd64.whl",
+    "./wheels/trimesh-4.11.5-py3-none-any.whl",
+    "./wheels/certifi-2026.4.22-py3-none-any.whl",
+]

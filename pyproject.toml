@@ -31,7 +31,7 @@ blender-tools = "blender_tools.cli:main"
 
 [tool.setuptools]
 packages = ["blender_tools", "blender_tools.tests"]
-package-dir = { "" = "." }
+package-dir = { "blender_tools" = ".", "blender_tools.tests" = "tests" }
 
 [tool.pytest.ini_options]
 markers = [

@@ -678,7 +678,21 @@ def _run_hidden_geo_cull(args: argparse.Namespace) -> int:
     return 0
 
 
+def _force_utf8_stdio() -> None:
+    """Reconfigure stdout/stderr to utf-8 so help text with non-ASCII
+    glyphs (→, —, ², °, …) does not crash on Windows where the default
+    code page is cp1252. No-op if the stream has no reconfigure()."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
     parser = argparse.ArgumentParser(
         prog="blender-tools",
         description="Blender 5.x pipeline tools for IR-Unity-Research.",

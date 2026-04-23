@@ -18,3 +18,15 @@ Modules
 """
 
 __version__ = "0.1.0"
+
+
+def register() -> None:
+    """Blender-extension entry point. Imports bpy lazily so pytest (mocked bpy)
+    and the `blender-tools` CLI are unaffected."""
+    from . import operators
+    operators.register()
+
+
+def unregister() -> None:
+    from . import operators
+    operators.unregister()
