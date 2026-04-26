@@ -49,3 +49,22 @@ def test_subcommand_help_survives_cp1252_stdout(monkeypatch):
         with pytest.raises(SystemExit) as exc:
             cli.main([cmd, "--help"])
         assert exc.value.code == 0, f"{cmd} --help should exit 0"
+
+
+def test_full_pipeline_operator_class_exists():
+    from blender_tools import operators
+    cls = getattr(operators, "BLENDERTOOLS_OT_full_pipeline", None)
+    assert cls is not None, "Operator class missing"
+    assert cls.bl_idname == "blender_tools.full_pipeline"
+    # Must accept a region and engine.
+    annot = getattr(cls, "__annotations__", {})
+    assert "region" in annot or hasattr(cls, "region")
+    assert "engine" in annot or hasattr(cls, "engine")
+
+
+def test_full_pipeline_panel_exists():
+    from blender_tools import operators
+    panel = getattr(operators, "BLENDERTOOLS_PT_panel", None)
+    assert panel is not None
+    assert panel.bl_space_type == "VIEW_3D"
+    assert panel.bl_region_type == "UI"
