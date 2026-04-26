@@ -179,3 +179,58 @@ def build_terrain_from_heightmap(
         del smooth
 
     return plane
+
+
+def apply_ortho_drape(plane_obj: Any, ortho_dir: str | Path,
+                      material_name: str = "OrthoDrape") -> Any:
+    """Attach a UDIM ortho material to a terrain plane.
+
+    Reads `ortho_dir/ortho.<udim>.jpg` files (produced by
+    geo_import.dop_to_udim_tiles), creates a Blender Image data-block in UDIM
+    mode, builds a minimal Principled BSDF material with the image as Base
+    Color, and assigns it to the plane.
+    """
+    bpy = _require_bpy()
+    ortho_dir = Path(ortho_dir)
+    tiles = sorted(ortho_dir.glob("ortho.*.jpg"))
+    if not tiles:
+        raise FileNotFoundError(f"no ortho.*.jpg tiles in {ortho_dir}")
+
+    # Load first tile, then add the rest as UDIM tiles on the same Image.
+    first = tiles[0]
+    img = bpy.data.images.load(str(first), check_existing=True)
+    img.source = "TILED"
+    # Tile 0 (1001) is implicit. Add the others.
+    base_udim = int(first.stem.split(".")[1])  # "ortho.1001" -> 1001
+    if hasattr(img, "tiles"):
+        for tile in tiles[1:]:
+            udim = int(tile.stem.split(".")[1])
+            try:
+                img.tiles.new(tile_number=udim, label=str(tile.name))
+            except Exception:
+                pass
+
+    mat = bpy.data.materials.new(name=material_name)
+    mat.use_nodes = True
+    nodes = mat.node_tree.nodes
+    links = mat.node_tree.links
+    # Wipe defaults and rebuild.
+    for n in list(nodes):
+        nodes.remove(n)
+    out = nodes.new("ShaderNodeOutputMaterial")
+    bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+    tex = nodes.new("ShaderNodeTexImage")
+    uv = nodes.new("ShaderNodeUVMap")
+    tex.image = img
+    tex.extension = "EXTEND"
+    links.new(uv.outputs["UV"], tex.inputs["Vector"])
+    links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    # Roughness up so terrain doesn't look like wet plastic.
+    if "Roughness" in bsdf.inputs:
+        bsdf.inputs["Roughness"].default_value = 0.85
+
+    plane_obj.data.materials.clear() if hasattr(plane_obj.data.materials, "clear") \
+        else None
+    plane_obj.data.materials.append(mat)
+    return mat

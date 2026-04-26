@@ -309,3 +309,72 @@ class TestBuildTerrainUnderMockedBpy:
         # If we get here without ImportError, the guard is working correctly.
         assert callable(mod.compute_plane_dimensions)
         assert callable(mod.build_terrain_from_heightmap)
+
+
+def test_apply_ortho_drape_builds_udim_material(monkeypatch, tmp_path):
+    """apply_ortho_drape attaches a Principled BSDF + UDIM Image Texture."""
+    from blender_tools import terrain_setup
+
+    # Create three fake UDIM tiles in the dir.
+    for udim in (1001, 1002, 1011):
+        (tmp_path / f"ortho.{udim}.jpg").write_bytes(b"fake")
+
+    captured = {}
+
+    class FakeSocket:
+        def __init__(self, name): self.name = name; self.default_value = None
+    _TYPE_MAP = {
+        "ShaderNodeOutputMaterial": "OUTPUT_MATERIAL",
+        "ShaderNodeBsdfPrincipled": "BSDF_PRINCIPLED",
+        "ShaderNodeTexImage": "TEX_IMAGE",
+        "ShaderNodeUVMap": "UVMAP",
+    }
+    class FakeNode:
+        def __init__(self, t):
+            self.type = _TYPE_MAP.get(t, t)
+            self.image = None; self.extension = None
+            self.inputs = _SocketDict()
+            self.outputs = _SocketDict()
+    class _SocketDict(dict):
+        def __getitem__(self, k):
+            if not dict.__contains__(self, k):
+                dict.__setitem__(self, k, FakeSocket(k))
+            return dict.__getitem__(self, k)
+        def __contains__(self, k):
+            return True  # any socket name is "available"
+    class FakeNodeList(list):
+        def new(self, t):
+            n = FakeNode(t); self.append(n); return n
+        def remove(self, n):
+            list.remove(self, n)
+    class FakeLinkList(list):
+        def new(self, a, b):
+            self.append((a, b)); return (a, b)
+    class FakeNodeTree:
+        def __init__(self):
+            self.nodes = FakeNodeList(); self.links = FakeLinkList()
+        def new(self, t):
+            return self.nodes.new(t)
+    class FakeMaterial:
+        def __init__(self, name):
+            self.name = name; self.use_nodes = False
+            self.node_tree = FakeNodeTree()
+    class FakeImage:
+        def __init__(self, name): self.name = name; self.source = None; self.tiles = []
+        def add_tile(self, **kw): self.tiles.append(kw)
+    class FakeData:
+        def __init__(self): self.materials = self; self.images = self
+        def new(self, name): captured["last"] = FakeMaterial(name); return captured["last"]
+        def load(self, fp, check_existing=False): return FakeImage(fp)
+    class FakeObj:
+        def __init__(self): self.data = type("M", (), {"materials": []})()
+    fake_bpy = type("B", (), {"data": FakeData()})()
+
+    monkeypatch.setattr(terrain_setup, "_require_bpy", lambda: fake_bpy)
+    obj = FakeObj()
+    mat = terrain_setup.apply_ortho_drape(obj, tmp_path)
+    assert mat.use_nodes is True
+    types = [n.type for n in mat.node_tree.nodes]
+    assert "TEX_IMAGE" in types
+    assert "BSDF_PRINCIPLED" in types
+    assert "OUTPUT_MATERIAL" in types
