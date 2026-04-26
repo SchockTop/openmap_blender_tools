@@ -142,6 +142,11 @@ def apply_camera_preset(camera_obj: Any,
     rig = camera_obj.parent if camera_obj.parent else camera_obj
     rig.location.z = target_z
 
+    # Bug A fix: if the camera follows a path, the Follow Path constraint
+    # overrides rig.location.z. Lift the curve itself to the target altitude.
+    if curve_obj is not None and curve_obj.type == "CURVE":
+        _lift_curve_to_altitude(curve_obj, target_z)
+
     # If path is given, update path_duration to honor preset speed.
     if curve_obj is not None and curve_obj.type == "CURVE" and scene is not None:
         # arc_length / speed = duration (seconds) -> frames = duration * fps.
@@ -224,3 +229,27 @@ def _add_noise_modifier(obj: Any, amplitude_deg: float) -> None:
             m = fc.modifiers.new(type="NOISE")
             m.strength = amp_rad
             m.scale = 5.0
+
+
+def _lift_curve_to_altitude(curve_obj: Any, target_z: float) -> None:
+    """Translate every Bezier/poly control point's Z to land at target_z (mean).
+
+    Strategy: compute current mean Z of all control points, compute delta to
+    reach target_z, apply that delta as a translation to all points (preserves
+    relative shape - gentle hills in Z stay; absolute level shifts).
+    """
+    points = []
+    for spline in curve_obj.data.splines:
+        points.extend(spline.bezier_points)
+        points.extend(spline.points)
+    if not points:
+        return
+    current_mean_z = sum(p.co.z for p in points) / len(points)
+    delta = target_z - current_mean_z
+    for p in points:
+        p.co.z += delta
+        # Update bezier handles too if they exist (not present on poly points).
+        for handle_attr in ("handle_left", "handle_right"):
+            handle = getattr(p, handle_attr, None)
+            if handle is not None:
+                handle.z += delta

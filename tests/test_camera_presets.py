@@ -108,6 +108,49 @@ def test_apply_camera_preset_sets_motion_blur_when_scene_given():
     assert scene.render.motion_blur_shutter == 0.5
 
 
+def test_lift_curve_to_altitude_translates_all_points():
+    """Helper must shift every control point so the mean lands at target_z."""
+    from blender_tools.camera_presets import _lift_curve_to_altitude
+    from unittest.mock import MagicMock
+    # Fake spline with 3 bezier points at z=0, 10, 20 (mean=10).
+    points = []
+    for z in (0.0, 10.0, 20.0):
+        p = MagicMock()
+        p.co = MagicMock(); p.co.z = z
+        p.handle_left = MagicMock(); p.handle_left.z = z - 1
+        p.handle_right = MagicMock(); p.handle_right.z = z + 1
+        points.append(p)
+    spline = MagicMock(); spline.bezier_points = points; spline.points = []
+    curve_obj = MagicMock(); curve_obj.data.splines = [spline]
+    _lift_curve_to_altitude(curve_obj, 100.0)
+    # Mean should now be 100. Original Z's were 0, 10, 20 -> after +90: 90, 100, 110. mean=100.
+    assert points[0].co.z == 90.0
+    assert points[1].co.z == 100.0
+    assert points[2].co.z == 110.0
+    # Handles also shifted.
+    assert points[0].handle_left.z == 89.0
+    assert points[0].handle_right.z == 91.0
+
+
+def test_apply_camera_preset_lifts_curve_via_helper(monkeypatch):
+    """When curve_obj is present, the curve-lift helper must be called."""
+    from blender_tools import camera_presets
+    from unittest.mock import MagicMock
+    cam = MagicMock(); cam.type = "CAMERA"; cam.data = MagicMock()
+    cam.parent = None; cam.animation_data = None
+    curve = MagicMock(); curve.type = "CURVE"
+    curve.data.splines = []  # empty curve - lift is no-op but should still be called
+    scene = MagicMock(); scene.render.fps = 25.0
+    called_with = {}
+    def fake_lift(c, z):
+        called_with["curve"] = c; called_with["z"] = z
+    monkeypatch.setattr(camera_presets, "_lift_curve_to_altitude", fake_lift)
+    camera_presets.apply_camera_preset(cam, "low-drone", scene=scene,
+                                        curve_obj=curve, terrain_z=520.0)
+    assert called_with["curve"] is curve
+    assert called_with["z"] == 600.0  # terrain_z 520 + low-drone altitude 80
+
+
 def test_preset_altitudes_are_monotonically_distinct():
     """Sanity: each preset altitude is meaningfully different so renders differ."""
     from blender_tools.camera_presets import CAMERA_PRESETS
