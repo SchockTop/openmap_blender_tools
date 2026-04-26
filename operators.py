@@ -107,6 +107,18 @@ class BLENDERTOOLS_OT_full_pipeline(bpy.types.Operator):
         ],
         default="muc-sued-4x2",
     )
+    camera_preset: EnumProperty(
+        name="Camera preset",
+        items=[
+            ("fpv-walk",                "FPV walking (1.7 m, 1.4 m/s, 24 mm)", ""),
+            ("fpv-bike",                "FPV bike (1.7 m, 6 m/s, 18 mm)",       ""),
+            ("low-drone",               "Low drone (80 m, 10 m/s, 24 mm)",      ""),
+            ("mid-drone",               "Mid drone (500 m, 30 m/s, 50 mm)",     ""),
+            ("cinematic-establishing",  "Cinematic (2000 m, 70 m/s, 85 mm)",    ""),
+            ("aircraft-approach",       "Aircraft (4500 m, 150 m/s, 135 mm)",   ""),
+        ],
+        default="cinematic-establishing",
+    )
     engine: EnumProperty(
         name="Render engine",
         items=[
@@ -135,6 +147,7 @@ class BLENDERTOOLS_OT_full_pipeline(bpy.types.Operator):
             "python", str(script),
             "--region", self.region,
             "--engine", self.engine,
+            "--camera-preset", self.camera_preset,
         ]
         if self.render_preview:
             cmd.append("--render-preview")
