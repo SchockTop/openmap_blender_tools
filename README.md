@@ -21,6 +21,48 @@ Or in the GUI: **Edit → Preferences → Extensions → Install from Disk → `
 Operators register under the `Blender Tools` submenu in **Add (Shift+A)** in the
 3D Viewport and as `bpy.ops.blender_tools.*` from scripts.
 
+## N-panel — one-click cinematic
+
+After the extension is enabled, open the **3D Viewport** and press **N** to reveal
+the sidebar. A new **OpenMap** tab exposes the full cinematic pipeline:
+
+- **Build cinematic scene from region** — runs `BLENDERTOOLS_OT_full_pipeline`,
+  which shells out to `workflows/full_pipeline.py` in the umbrella
+  `OpenMap_Workflow` repo. Pick a region preset (e.g. `muc-sued-4x2`), choose
+  datasets (`dgm1` / `dop40` / `lod2`), and Blender will load the resulting
+  `.blend` when the orchestrator finishes.
+
+The same operator is available headless as
+`bpy.ops.blender_tools.full_pipeline(region="muc-sued-4x2", datasets="dgm1,dop40,lod2")`.
+
+## Playbook one-liners
+
+```python
+# Thread 3 — geo import (CPython, no Blender):
+from openmap_blender_tools.geo_import import reproject_geotiff
+reproject_geotiff("data/raw/dop40_tile.tif", "data/processed/dop40_tile_3857.tif", "EPSG:3857")
+
+# Thread 4 — terrain + ortho drape (inside Blender):
+from openmap_blender_tools.terrain_setup import create_terrain_from_dgm, apply_ortho_drape
+plane = create_terrain_from_dgm("data/processed/dgm1_merged.tif")
+apply_ortho_drape(plane, "data/processed/dop40_udim.<UDIM>.tif")
+
+# Thread 4 — LoD2 buildings (pure-Python CityGML -> CityJSON, then import):
+from openmap_blender_tools.citygml_import import gml_to_cityjson_pure, import_cityjson_buildings
+gml_to_cityjson_pure("data/raw/lod2_tile.gml", "data/processed/lod2_tile.json")
+import_cityjson_buildings("data/processed/lod2_tile.json")
+
+# Thread 4 — cinematic camera fly-over with constant velocity:
+from openmap_blender_tools.waypoints_to_camera import build_camera_path, keyframe_constant_velocity
+cam = build_camera_path([(0,0,200), (4000,0,200), (4000,2000,200)])
+keyframe_constant_velocity(cam, frame_start=1, frame_end=240, speed_m_per_s=80.0)
+
+# Thread 4 — one-call cinematic preset (Eevee Next, large-scene clipping, AA):
+from openmap_blender_tools.cinematic_preset import apply_cinematic_preset, set_camera_clip_for_large_scene
+apply_cinematic_preset()
+set_camera_clip_for_large_scene(clip_end=20000.0)
+```
+
 ## Install — as a pip package (for development)
 
 ```bash
