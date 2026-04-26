@@ -12,6 +12,107 @@ from pathlib import Path
 from typing import Optional, Any
 import json
 import subprocess
+from xml.etree import ElementTree as ET
+
+_CITYGML_NS = {
+    "core": "http://www.opengis.net/citygml/2.0",
+    "bldg": "http://www.opengis.net/citygml/building/2.0",
+    "gml":  "http://www.opengis.net/gml",
+}
+
+
+def _parse_pos_list(text: str, srs_dim: int = 3) -> list[tuple[float, float, float]]:
+    """Split a gml:posList text blob into (x, y, z) tuples (z=0 for 2D)."""
+    nums = [float(n) for n in text.split()]
+    if srs_dim == 3:
+        return [(nums[i], nums[i + 1], nums[i + 2]) for i in range(0, len(nums), 3)]
+    return [(nums[i], nums[i + 1], 0.0) for i in range(0, len(nums), 2)]
+
+
+def _vertex_index(vertex: tuple[float, float, float],
+                  pool: dict[tuple[float, float, float], int],
+                  ordered: list[tuple[float, float, float]]) -> int:
+    if vertex in pool:
+        return pool[vertex]
+    idx = len(ordered)
+    pool[vertex] = idx
+    ordered.append(vertex)
+    return idx
+
+
+def gml_to_cityjson_pure(input_gmls: list[Path], output_json: Path) -> Path:
+    """Pure-Python CityGML 2.0 -> CityJSON 1.1 converter for LDBV LoD2 tiles.
+
+    Handles the LDBV CityGML subset: Building / lod2Solid / CompositeSurface /
+    surfaceMember / Polygon / exterior / LinearRing / posList. Drops semantic
+    surfaces (RoofSurface / WallSurface) — buildings come out as one Solid.
+    Skips MultiSurface fallback for now.
+
+    Returns output_json on success.
+    """
+    output_json = Path(output_json)
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+
+    vertex_pool: dict[tuple[float, float, float], int] = {}
+    vertices: list[tuple[float, float, float]] = []
+    city_objects: dict[str, dict] = {}
+
+    # Accept both CityGML 1.0 (LDBV) and 2.0 building namespaces.
+    bldg_tags = (
+        "{http://www.opengis.net/citygml/building/2.0}Building",
+        "{http://www.opengis.net/citygml/building/1.0}Building",
+    )
+    poly_tag = "{http://www.opengis.net/gml}Polygon"
+    poslist_xpath = (
+        ".//{http://www.opengis.net/gml}exterior"
+        "/{http://www.opengis.net/gml}LinearRing"
+        "/{http://www.opengis.net/gml}posList"
+    )
+
+    for gml_path in input_gmls:
+        tree = ET.parse(gml_path)
+        root = tree.getroot()
+        buildings = []
+        for tag in bldg_tags:
+            buildings.extend(root.iter(tag))
+        for bldg in buildings:
+            bid = bldg.get("{http://www.opengis.net/gml}id") or f"bldg_{len(city_objects)}"
+            polys: list[list[int]] = []
+            for poly in bldg.iter(poly_tag):
+                ring = poly.find(poslist_xpath)
+                if ring is None or ring.text is None:
+                    continue
+                srs_dim = int(ring.get("srsDimension", "3"))
+                pts = _parse_pos_list(ring.text, srs_dim)
+                # CityGML rings repeat the first point at the end — drop it.
+                if pts and pts[0] == pts[-1]:
+                    pts = pts[:-1]
+                if len(pts) < 3:
+                    continue
+                ring_idx = [_vertex_index(p, vertex_pool, vertices) for p in pts]
+                polys.append([ring_idx])  # single exterior ring (no holes)
+            if not polys:
+                continue
+            city_objects[bid] = {
+                "type": "Building",
+                "geometry": [{
+                    "type": "Solid",
+                    "lod": "2",
+                    "boundaries": [polys],  # Solid -> shells -> surfaces -> rings
+                }],
+            }
+
+    cityjson = {
+        "type": "CityJSON",
+        "version": "1.1",
+        "CityObjects": city_objects,
+        "vertices": [list(v) for v in vertices],
+        "metadata": {
+            "referenceSystem": "https://www.opengis.net/def/crs/EPSG/0/25832",
+        },
+    }
+    output_json.write_text(json.dumps(cityjson, separators=(",", ":")), encoding="utf-8")
+    return output_json
 
 
 # Pure-Python helpers (no external deps — fully unit-testable)

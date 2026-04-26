@@ -418,3 +418,78 @@ def test_cityjson_to_blender_raises_without_bpy(tmp_path, monkeypatch):
     ):
         with pytest.raises(RuntimeError, match="requires bpy"):
             cityjson_to_blender(cityjson_path)
+
+
+# ---------------------------------------------------------------------------
+# gml_to_cityjson_pure — pure-Python LDBV LoD2 converter
+# ---------------------------------------------------------------------------
+
+import textwrap
+
+LDBV_LOD2_SAMPLE = textwrap.dedent("""\
+<?xml version="1.0" encoding="UTF-8"?>
+<core:CityModel xmlns:core="http://www.opengis.net/citygml/2.0"
+                xmlns:bldg="http://www.opengis.net/citygml/building/2.0"
+                xmlns:gml="http://www.opengis.net/gml">
+  <core:cityObjectMember>
+    <bldg:Building gml:id="B1">
+      <bldg:lod2Solid>
+        <gml:Solid>
+          <gml:exterior>
+            <gml:CompositeSurface>
+              <gml:surfaceMember>
+                <gml:Polygon>
+                  <gml:exterior>
+                    <gml:LinearRing>
+                      <gml:posList srsDimension="3">
+                        691000 5334000 520
+                        691010 5334000 520
+                        691010 5334010 520
+                        691000 5334010 520
+                        691000 5334000 520
+                      </gml:posList>
+                    </gml:LinearRing>
+                  </gml:exterior>
+                </gml:Polygon>
+              </gml:surfaceMember>
+            </gml:CompositeSurface>
+          </gml:exterior>
+        </gml:Solid>
+      </bldg:lod2Solid>
+    </bldg:Building>
+  </core:cityObjectMember>
+</core:CityModel>
+""")
+
+
+def test_gml_to_cityjson_pure_parses_one_building(tmp_path):
+    from blender_tools.citygml_import import gml_to_cityjson_pure
+    gml = tmp_path / "sample.gml"
+    gml.write_text(LDBV_LOD2_SAMPLE, encoding="utf-8")
+    out = tmp_path / "sample.json"
+    result = gml_to_cityjson_pure([gml], out)
+    assert result == out
+    cj = json.loads(out.read_text(encoding="utf-8"))
+    assert cj["type"] == "CityJSON"
+    assert cj["version"] in {"1.0", "1.1", "2.0"}
+    assert len(cj["CityObjects"]) == 1
+    assert "B1" in cj["CityObjects"]
+    assert cj["CityObjects"]["B1"]["type"] == "Building"
+    assert len(cj["vertices"]) >= 4  # 4 unique XY corners (last == first dropped)
+    geom = cj["CityObjects"]["B1"]["geometry"][0]
+    assert geom["type"] == "Solid"
+    assert geom["lod"] in {"2", "2.0", 2}
+    boundaries = geom["boundaries"]
+    assert isinstance(boundaries, list) and len(boundaries) >= 1
+
+
+def test_gml_to_cityjson_pure_real_ldbv(tmp_path):
+    from blender_tools.citygml_import import gml_to_cityjson_pure
+    src = Path("../OpenMap_Workflow/data/raw/lod2/690_5334.gml")
+    if not src.exists():
+        pytest.skip("LDBV LoD2 sample not downloaded")
+    out = tmp_path / "muc.json"
+    gml_to_cityjson_pure([src], out)
+    cj = json.loads(out.read_text(encoding="utf-8"))
+    assert len(cj["CityObjects"]) > 100, len(cj["CityObjects"])
+    assert len(cj["vertices"]) > 1000
