@@ -272,6 +272,24 @@ def keyframe_constant_velocity(curve_data: Any) -> None:
     curve_data.eval_time = float(duration)
     curve_data.keyframe_insert("eval_time", frame=duration)
     if curve_data.animation_data and curve_data.animation_data.action:
-        for fc in curve_data.animation_data.action.fcurves:
-            for kp in fc.keyframe_points:
-                kp.interpolation = "LINEAR"
+        action = curve_data.animation_data.action
+        # Blender 4.4+ uses slotted/layered Actions; <=4.3 exposes .fcurves.
+        fcurves_iters = []
+        if hasattr(action, "fcurves") and len(getattr(action, "fcurves", [])) > 0:
+            fcurves_iters.append(action.fcurves)
+        if hasattr(action, "layers"):
+            slot = curve_data.animation_data.action_slot if hasattr(
+                curve_data.animation_data, "action_slot") else None
+            for layer in action.layers:
+                for strip in layer.strips:
+                    if slot is not None and hasattr(strip, "channelbag"):
+                        cb = strip.channelbag(slot)
+                        if cb is not None:
+                            fcurves_iters.append(cb.fcurves)
+                    elif hasattr(strip, "channelbags"):
+                        for cb in strip.channelbags:
+                            fcurves_iters.append(cb.fcurves)
+        for fcurves in fcurves_iters:
+            for fc in fcurves:
+                for kp in fc.keyframe_points:
+                    kp.interpolation = "LINEAR"

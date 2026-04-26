@@ -44,6 +44,20 @@ def apply_cinematic_preset(scene: Any,
     """
     _ = _require_bpy()  # ensure we're inside Blender; bpy not used directly here
 
+    # Blender 5.x renamed "BLENDER_EEVEE_NEXT" back to "BLENDER_EEVEE" (Eevee
+    # Next is the only Eevee in 5.x). Map both spellings to whatever the host
+    # actually exposes.
+    try:
+        valid_engines = {
+            i.identifier for i in scene.render.bl_rna.properties["engine"].enum_items
+        }
+    except Exception:
+        valid_engines = {"BLENDER_EEVEE", "BLENDER_EEVEE_NEXT", "CYCLES", "BLENDER_WORKBENCH"}
+    if render_engine not in valid_engines:
+        if render_engine == "BLENDER_EEVEE_NEXT" and "BLENDER_EEVEE" in valid_engines:
+            render_engine = "BLENDER_EEVEE"
+        elif render_engine == "BLENDER_EEVEE" and "BLENDER_EEVEE_NEXT" in valid_engines:
+            render_engine = "BLENDER_EEVEE_NEXT"
     scene.render.engine = render_engine
     scene.render.resolution_x = resolution[0]
     scene.render.resolution_y = resolution[1]

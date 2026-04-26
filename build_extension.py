@@ -30,6 +30,7 @@ HERE = Path(__file__).resolve().parent
 RUNTIME_MODULES = [
     "__init__.py",
     "cli.py",
+    "cinematic_preset.py",
     "citygml_import.py",
     "cleanup_pymeshlab.py",
     "geo_import.py",
