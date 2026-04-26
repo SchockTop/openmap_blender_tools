@@ -15,7 +15,29 @@ def _fake_scene():
     s.eevee.use_volumetric_shadows = False
     s.eevee.taa_render_samples = 0
     s.view_settings.view_transform = ""
+    s.view_settings.exposure = 0.0
+    s.world = None
     return s
+
+
+def test_apply_cinematic_preset_sets_exposure_compensation(monkeypatch):
+    """Scene exposure must be set to compensate for AgX's conservative highlights."""
+    from blender_tools import cinematic_preset
+    fake_bpy = MagicMock(); fake_bpy.data.cameras = []
+    monkeypatch.setattr(cinematic_preset, "_require_bpy", lambda: fake_bpy)
+    scene = MagicMock(); scene.objects = []
+    scene.render.engine = "CYCLES"; scene.world = None
+    cinematic_preset.apply_cinematic_preset(scene, render_engine="BLENDER_EEVEE_NEXT")
+    assert scene.view_settings.exposure == 1.5
+
+
+def test_ensure_cinematic_sun_uses_higher_energy_default():
+    """The default sun energy should be at least 100 for visible renders."""
+    from blender_tools import cinematic_preset
+    import inspect
+    sig = inspect.signature(cinematic_preset._ensure_cinematic_sun)
+    energy_default = sig.parameters["energy"].default
+    assert energy_default >= 100, f"sun energy default {energy_default} < 100; renders will be too dark"
 
 
 def test_apply_cinematic_preset_eevee(monkeypatch):

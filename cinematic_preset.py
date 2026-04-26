@@ -22,9 +22,9 @@ def _require_bpy() -> Any:
 
 def _ensure_cinematic_sun(scene: Any,
                           name: str = "CinematicSun",
-                          energy: float = 50.0,
-                          pitch_deg: float = 50.0,
-                          azimuth_deg: float = 45.0) -> Any:
+                          energy: float = 150.0,
+                          pitch_deg: float = 60.0,
+                          azimuth_deg: float = 30.0) -> Any:
     """Add a Sun light to the scene if none exists.
 
     A Multiple-Scattering Sky alone provides only ambient illumination — without
@@ -108,3 +108,25 @@ def apply_cinematic_preset(scene: Any,
     # AgX (Blender 5.x default but explicit for repro).
     scene.view_settings.view_transform = "AgX"
     scene.view_settings.look = "AgX - Medium High Contrast"
+
+    # Exposure compensation — AgX is conservative on highlights, so bump
+    # the scene exposure +1.5 stops for a brighter cinematic look.
+    scene.view_settings.exposure = 1.5
+
+    # Dial up the world Multiple Scattering Sky strength if present.
+    world = scene.world
+    if world is not None and world.use_nodes and world.node_tree:
+        for node in world.node_tree.nodes:
+            if node.type == "TEX_SKY":
+                # Sky background: more atmospheric scattering, brighter sun disk.
+                if hasattr(node, "air_density"):
+                    try:
+                        node.air_density = 1.5
+                    except (AttributeError, TypeError):
+                        pass
+            if node.type == "BACKGROUND":
+                # Bump sky background strength (scene illumination from sky).
+                if "Strength" in node.inputs:
+                    node.inputs["Strength"].default_value = max(
+                        float(node.inputs["Strength"].default_value), 1.5
+                    )
