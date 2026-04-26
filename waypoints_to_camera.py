@@ -252,4 +252,26 @@ def attach_camera_rig(
     # that the GN driver reads.
     rig_empty["banking_max_deg"] = banking_max_deg
 
+    # Force constant velocity (default behaviour per cinematic playbook).
+    keyframe_constant_velocity(curve_obj.data)
+
     return cam
+
+
+def keyframe_constant_velocity(curve_data: Any) -> None:
+    """Force constant velocity along a Bezier path by linear-keyframing eval_time.
+
+    Path Animation's "Frames" slider produces ease-in/out at Bezier handles.
+    Per the cinematic-camera-rig playbook §5.2, the only way to get true
+    constant m/s is to keyframe Evaluation Time at frames 1 and path_duration
+    with LINEAR interpolation.
+    """
+    duration = int(curve_data.path_duration)
+    curve_data.eval_time = 0.0
+    curve_data.keyframe_insert("eval_time", frame=1)
+    curve_data.eval_time = float(duration)
+    curve_data.keyframe_insert("eval_time", frame=duration)
+    if curve_data.animation_data and curve_data.animation_data.action:
+        for fc in curve_data.animation_data.action.fcurves:
+            for kp in fc.keyframe_points:
+                kp.interpolation = "LINEAR"

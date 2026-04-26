@@ -619,3 +619,27 @@ class TestAttachCameraRigMockedBpy:
 
         result = attach_camera_rig(curve_obj)
         assert result is cam_obj
+
+
+def test_keyframe_constant_velocity_sets_linear_interpolation(monkeypatch):
+    from blender_tools import waypoints_to_camera as w2c
+    from unittest.mock import MagicMock
+
+    inserted = []
+    keyframe_points = [MagicMock(interpolation="BEZIER"),
+                       MagicMock(interpolation="BEZIER")]
+    fcurve = MagicMock(); fcurve.keyframe_points = keyframe_points
+    action = MagicMock(); action.fcurves = [fcurve]
+    anim_data = MagicMock(); anim_data.action = action
+    curve_data = MagicMock(); curve_data.path_duration = 100
+    curve_data.animation_data = anim_data
+    curve_data.eval_time = 0.0
+    curve_data.keyframe_insert = MagicMock(side_effect=lambda *a, **kw: inserted.append((a, kw)))
+
+    w2c.keyframe_constant_velocity(curve_data)
+    # Two keyframes inserted on eval_time
+    assert any(("eval_time" in a or kw.get("data_path") == "eval_time")
+               for a, kw in inserted)
+    # All keyframe points set to LINEAR
+    for kp in keyframe_points:
+        assert kp.interpolation == "LINEAR"
