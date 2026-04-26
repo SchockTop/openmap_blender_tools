@@ -1,0 +1,3 @@
+# Treat all vendored binaries + data as-is — no line-ending normalization.
+# This vendor tree is a verbatim slice of the upstream conda-forge package.
+* -text

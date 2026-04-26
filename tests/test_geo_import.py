@@ -128,15 +128,55 @@ def test_tile_bboxes_second_row_starts_at_1011():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.needs_gdal
-@pytest.mark.skip(reason="Requires GDAL CLI; run manually.")
-def test_dgm_tif_to_exr_heightmap_integration(tmp_path):
-    """Integration smoke — kept skipped to keep unit-test runs fast."""
-    pass
+def _have_vendored_gdal() -> bool:
+    from blender_tools.geo_import import _VENDOR_ROOT
+    return (_VENDOR_ROOT / "bin" / "gdal_translate.exe").is_file()
 
 
-@pytest.mark.needs_gdal
-@pytest.mark.skip(reason="Requires GDAL CLI; run manually.")
-def test_dop_to_udim_tiles_integration(tmp_path):
-    """Integration smoke for DOP→UDIM — kept skipped to keep unit-test runs fast."""
-    pass
+@pytest.mark.skipif(not _have_vendored_gdal(), reason="vendored GDAL not present")
+def test_dgm_tif_to_heightmap_integration(tmp_path):
+    """End-to-end: build a synthetic DGM GeoTIFF, mosaic + Float32 convert via
+    the vendored GDAL, then read back the output to verify it is a valid
+    Float32 GeoTIFF.
+    """
+    import subprocess
+    from blender_tools.geo_import import (
+        _VENDOR_ROOT,
+        _resolve_gdal_bin,
+        _vendored_gdal_env,
+        dgm_tif_to_heightmap,
+    )
+
+    env = _vendored_gdal_env()
+    gdal_translate = _resolve_gdal_bin("gdal_translate")
+    gdalinfo = _resolve_gdal_bin("gdalinfo")
+
+    # Synthetic DGM tile: 100x100 px Int16 ramp in EPSG:25832, 1m pixel
+    # @ Munich Marienplatz UTM (~691000, 5335000).
+    src_tif = tmp_path / "dgm_synth.tif"
+    xyz = tmp_path / "dgm_synth.xyz"
+    with xyz.open("w") as f:
+        for j in range(100):
+            for i in range(100):
+                x = 691000 + i
+                y = 5335100 - j
+                z = 520 + i * 0.1 + j * 0.2  # gentle slope, 520-550m range
+                f.write(f"{x} {y} {z}\n")
+    subprocess.run(
+        [gdal_translate, "-of", "GTiff", "-a_srs", "EPSG:25832",
+         str(xyz), str(src_tif)],
+        check=True, env=env,
+    )
+
+    # Now exercise the function under test.
+    out = tmp_path / "heightmap.tif"
+    result = dgm_tif_to_heightmap([src_tif], out)
+    assert result == out
+    assert out.is_file()
+    assert out.stat().st_size > 0
+
+    info = subprocess.run(
+        [gdalinfo, str(out)], check=True, env=env, capture_output=True, text=True,
+    ).stdout
+    assert "Float32" in info, info
+    assert "EPSG" in info or "25832" in info, info

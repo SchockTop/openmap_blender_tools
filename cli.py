@@ -71,10 +71,11 @@ def _build_geo_import_parser(subparsers: argparse._SubParsersAction) -> None:  #
     )
     # Heightmap-mode options
     p.add_argument(
-        "--output-exr",
-        dest="output_exr",
+        "--output",
+        "--output-exr",  # back-compat alias
+        dest="output_path",
         metavar="PATH",
-        help="[heightmap mode] Destination EXR file path.",
+        help="[heightmap mode] Destination Float32 GeoTIFF (.tif) path.",
     )
     # UDIM-mode options
     p.add_argument(
@@ -208,24 +209,24 @@ def _run_terrain_setup(args: argparse.Namespace) -> int:
 
 def _run_geo_import(args: argparse.Namespace) -> int:
     """Dispatch the geo-import subcommand to the real implementation."""
-    from blender_tools.geo_import import dgm_tif_to_exr_heightmap, dop_to_udim_tiles
+    from blender_tools.geo_import import dgm_tif_to_heightmap, dop_to_udim_tiles
 
     input_tifs = [Path(p) for p in args.input]
     bbox = tuple(args.bbox) if args.bbox is not None else None  # type: ignore[arg-type]
 
     if args.mode == "heightmap":
-        if not args.output_exr:
+        if not args.output_path:
             print(
-                "[blender-tools] geo-import --mode heightmap requires --output-exr",
+                "[blender-tools] geo-import --mode heightmap requires --output",
                 file=sys.stderr,
             )
             return 1
-        output_exr = dgm_tif_to_exr_heightmap(
+        out = dgm_tif_to_heightmap(
             input_tifs=input_tifs,
-            output_exr=Path(args.output_exr),
+            output_path=Path(args.output_path),
             bbox_utm32n=bbox,
         )
-        print(f"[blender-tools] EXR heightmap written to: {output_exr}")
+        print(f"[blender-tools] Float32 GeoTIFF heightmap written to: {out}")
         return 0
 
     # udim mode

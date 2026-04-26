@@ -1,18 +1,65 @@
 """geo_import.py — GDAL-based preprocessing for DGM/DOP geospatial data.
 
-Converts Bayern LDBV DGM1/DGM5 GeoTIFFs to a 32-bit-float EXR heightmap
+Converts Bayern LDBV DGM1/DGM5 GeoTIFFs to a 32-bit-float GeoTIFF heightmap
 and splits DOP20 orthophotos into Blender UDIM tiles.
 
 All GDAL operations are performed via the external CLI (gdalbuildvrt,
 gdal_translate) through subprocess — the gdal Python binding is NOT required.
+
+GDAL discovery order:
+1. Explicit `gdal_bin` / `gdalbuildvrt_bin` arg.
+2. `vendor/gdal-win64/bin/` next to this file (offline-by-default).
+3. PATH lookup.
+
+The vendored GDAL ships with PROJ database (proj.db) and GDAL CSV resources
+under `vendor/gdal-win64/share/`; the helpers below set PROJ_LIB and GDAL_DATA
+in the subprocess env when the vendored binaries are used.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Optional
+
+
+# ---------------------------------------------------------------------------
+# Vendored-GDAL discovery
+# ---------------------------------------------------------------------------
+
+_VENDOR_ROOT = Path(__file__).resolve().parent / "vendor" / "gdal-win64"
+
+
+def _vendored_gdal_env() -> Optional[dict[str, str]]:
+    """Return an env-overlay (PROJ_LIB, GDAL_DATA, prepended PATH) for the
+    bundled GDAL, or None when no vendored copy is present.
+    """
+    bin_dir = _VENDOR_ROOT / "bin"
+    if not bin_dir.is_dir():
+        return None
+    env = os.environ.copy()
+    env["PROJ_LIB"] = str(_VENDOR_ROOT / "share" / "proj")
+    env["GDAL_DATA"] = str(_VENDOR_ROOT / "share" / "gdal")
+    env["PATH"] = str(bin_dir) + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def _resolve_gdal_bin(name: str, explicit: Optional[str] = None) -> str:
+    """Resolve a GDAL CLI binary path.
+
+    Order: explicit override → vendored copy → bare name (PATH lookup at runtime).
+    `name` is e.g. "gdal_translate"; on Windows the .exe is appended automatically.
+    """
+    if explicit and explicit not in (name, name + ".exe"):
+        return explicit
+    exe_name = name + (".exe" if sys.platform == "win32" else "")
+    vendored = _VENDOR_ROOT / "bin" / exe_name
+    if vendored.is_file():
+        return str(vendored)
+    return name
 
 
 # ---------------------------------------------------------------------------
@@ -98,37 +145,44 @@ def _tile_bboxes(
 # ---------------------------------------------------------------------------
 
 
-def dgm_tif_to_exr_heightmap(
+def dgm_tif_to_heightmap(
     input_tifs: list[Path],
-    output_exr: Path,
+    output_path: Path,
     bbox_utm32n: Optional[tuple[float, float, float, float]] = None,
-    gdal_bin: str = "gdal_translate",
-    gdalbuildvrt_bin: str = "gdalbuildvrt",
+    gdal_bin: Optional[str] = None,
+    gdalbuildvrt_bin: Optional[str] = None,
 ) -> Path:
-    """Mosaic DGM1/DGM5 GeoTIFFs and emit a 32-bit-float EXR heightmap in meters.
+    """Mosaic DGM1/DGM5 GeoTIFFs and emit a 32-bit-float GeoTIFF heightmap (meters).
 
     Steps (all via external GDAL CLI):
     1. gdalbuildvrt -srcnodata -9999 <tmp_vrt> <input_tifs...>
-    2. (optional) gdal_translate -projwin xmin ymax xmax ymin -projwin_srs EPSG:25832
-       to crop to bbox.
-    3. gdal_translate -ot Float32 -of EXR -co PIXEL_TYPE=FLOAT <src> <output_exr>.
+    2. (optional) gdal_translate -projwin … -projwin_srs EPSG:25832 → cropped VRT.
+    3. gdal_translate -ot Float32 -of GTiff -co COMPRESS=LZW -co PREDICTOR=3
+       <src> <output_path>.
+
+    Output is Float32 GeoTIFF (LZW-compressed, predictor=3 for floats). Blender's
+    Image Texture node loads this natively; no EXR plugin required.
 
     Args:
         input_tifs: One or more DGM GeoTIFF paths.
-        output_exr: Destination path for the EXR file.
+        output_path: Destination .tif path.
         bbox_utm32n: Optional crop extent (xmin, ymin, xmax, ymax) in EPSG:25832.
-        gdal_bin: Path or name of the gdal_translate executable.
-        gdalbuildvrt_bin: Path or name of the gdalbuildvrt executable.
+        gdal_bin: Override gdal_translate executable; defaults to vendored copy
+            then PATH.
+        gdalbuildvrt_bin: Override gdalbuildvrt executable; same fallback.
 
     Returns:
-        The output_exr path on success.
+        The output_path on success.
 
     Raises:
         subprocess.CalledProcessError: If any GDAL command fails.
-        FileNotFoundError: If a GDAL binary is not found on PATH.
+        FileNotFoundError: If a GDAL binary is not found.
     """
-    output_exr = Path(output_exr)
-    output_exr.parent.mkdir(parents=True, exist_ok=True)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    gdal_bin = _resolve_gdal_bin("gdal_translate", gdal_bin)
+    gdalbuildvrt_bin = _resolve_gdal_bin("gdalbuildvrt", gdalbuildvrt_bin)
+    env = _vendored_gdal_env()
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -140,7 +194,7 @@ def dgm_tif_to_exr_heightmap(
             "-srcnodata", "-9999",
             str(vrt_path),
         ] + [str(p) for p in input_tifs]
-        subprocess.run(vrt_cmd, check=True)
+        subprocess.run(vrt_cmd, check=True, env=env)
 
         # Step 2 (optional): crop to bbox
         if bbox_utm32n is not None:
@@ -153,23 +207,29 @@ def dgm_tif_to_exr_heightmap(
                 str(vrt_path),
                 str(cropped_vrt),
             ]
-            subprocess.run(crop_cmd, check=True)
+            subprocess.run(crop_cmd, check=True, env=env)
             src = cropped_vrt
         else:
             src = vrt_path
 
-        # Step 3: convert to Float32 EXR
-        exr_cmd = [
+        # Step 3: convert to Float32 LZW-compressed GeoTIFF
+        out_cmd = [
             gdal_bin,
             "-ot", "Float32",
-            "-of", "EXR",
-            "-co", "PIXEL_TYPE=FLOAT",
+            "-of", "GTiff",
+            "-co", "COMPRESS=LZW",
+            "-co", "PREDICTOR=3",
+            "-co", "TILED=YES",
             str(src),
-            str(output_exr),
+            str(output_path),
         ]
-        subprocess.run(exr_cmd, check=True)
+        subprocess.run(out_cmd, check=True, env=env)
 
-    return output_exr
+    return output_path
+
+
+# Back-compat alias (kept until call sites migrated).
+dgm_tif_to_exr_heightmap = dgm_tif_to_heightmap
 
 
 def dop_to_udim_tiles(
@@ -178,8 +238,8 @@ def dop_to_udim_tiles(
     output_dir: Path,
     tile_grid: tuple[int, int] = (10, 4),
     resolution_per_tile: int = 4096,
-    gdal_bin: str = "gdal_translate",
-    gdalbuildvrt_bin: str = "gdalbuildvrt",
+    gdal_bin: Optional[str] = None,
+    gdalbuildvrt_bin: Optional[str] = None,
 ) -> list[Path]:
     """Mosaic DOP20 orthophotos and split into Blender UDIM tiles (1001..10xx).
 
@@ -205,6 +265,9 @@ def dop_to_udim_tiles(
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    gdal_bin = _resolve_gdal_bin("gdal_translate", gdal_bin)
+    gdalbuildvrt_bin = _resolve_gdal_bin("gdalbuildvrt", gdalbuildvrt_bin)
+    env = _vendored_gdal_env()
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -215,7 +278,7 @@ def dop_to_udim_tiles(
             gdalbuildvrt_bin,
             str(vrt_path),
         ] + [str(p) for p in input_orthos]
-        subprocess.run(vrt_cmd, check=True)
+        subprocess.run(vrt_cmd, check=True, env=env)
 
         # Step 2: crop to the requested bbox
         cropped_vrt = tmp / "ortho_cropped.vrt"
@@ -227,7 +290,7 @@ def dop_to_udim_tiles(
             str(vrt_path),
             str(cropped_vrt),
         ]
-        subprocess.run(crop_cmd, check=True)
+        subprocess.run(crop_cmd, check=True, env=env)
 
         # Step 3: export each tile
         tiles = _tile_bboxes(bbox_utm32n, tile_grid)
@@ -244,7 +307,7 @@ def dop_to_udim_tiles(
                 str(cropped_vrt),
                 str(out_path),
             ]
-            subprocess.run(tile_cmd, check=True)
+            subprocess.run(tile_cmd, check=True, env=env)
             output_paths.append(out_path)
 
     return output_paths
