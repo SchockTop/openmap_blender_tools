@@ -22,7 +22,7 @@ def _require_bpy() -> Any:
 
 def _ensure_cinematic_sun(scene: Any,
                           name: str = "CinematicSun",
-                          energy: float = 5.0,
+                          energy: float = 50.0,
                           pitch_deg: float = 50.0,
                           azimuth_deg: float = 45.0) -> Any:
     """Add a Sun light to the scene if none exists.
