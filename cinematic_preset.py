@@ -6,6 +6,7 @@ simplify, render engine + sample budget, AgX view transform, volumetric
 shadows. Idempotent — safe to call multiple times.
 """
 from __future__ import annotations
+import math
 from typing import Any
 
 
@@ -17,6 +18,32 @@ def _require_bpy() -> Any:
         raise RuntimeError(
             "cinematic_preset requires Blender's bundled Python (bpy)."
         ) from e
+
+
+def _ensure_cinematic_sun(scene: Any,
+                          name: str = "CinematicSun",
+                          energy: float = 5.0,
+                          pitch_deg: float = 50.0,
+                          azimuth_deg: float = 45.0) -> Any:
+    """Add a Sun light to the scene if none exists.
+
+    A Multiple-Scattering Sky alone provides only ambient illumination — without
+    a directional Sun, ground-plane renders come out near-black. This helper is
+    idempotent: skips creation if any SUN-type light is already present.
+    """
+    bpy = _require_bpy()
+    # Idempotent: skip if any SUN already exists.
+    for obj in scene.objects:
+        if obj.type == "LIGHT" and obj.data.type == "SUN":
+            return obj
+    light_data = bpy.data.lights.new(name=name + "Data", type="SUN")
+    light_data.energy = energy
+    light_obj = bpy.data.objects.new(name=name, object_data=light_data)
+    light_obj.location = (0.0, 0.0, 10000.0)
+    light_obj.rotation_euler = (math.radians(pitch_deg), 0.0,
+                                math.radians(azimuth_deg))
+    scene.collection.objects.link(light_obj)
+    return light_obj
 
 
 def set_camera_clip_for_large_scene(camera_data: Any,
@@ -74,6 +101,9 @@ def apply_cinematic_preset(scene: Any,
     else:  # Eevee Next
         scene.eevee.taa_render_samples = samples if samples is not None else 64
         scene.eevee.use_volumetric_shadows = True
+
+    # Ensure a directional Sun exists — sky-only scenes render black.
+    _ensure_cinematic_sun(scene)
 
     # AgX (Blender 5.x default but explicit for repro).
     scene.view_settings.view_transform = "AgX"

@@ -49,3 +49,32 @@ def test_set_camera_clip_for_large_scene(monkeypatch):
     cinematic_preset.set_camera_clip_for_large_scene(cam_data)
     assert cam_data.clip_start == 1.0
     assert cam_data.clip_end == 100_000.0
+
+
+def test_ensure_cinematic_sun_creates_sun_when_none(monkeypatch):
+    from blender_tools import cinematic_preset
+    fake_bpy = MagicMock()
+    monkeypatch.setattr(cinematic_preset, "_require_bpy", lambda: fake_bpy)
+    scene = MagicMock(); scene.objects = []
+    light_data = MagicMock(); fake_bpy.data.lights.new.return_value = light_data
+    light_obj = MagicMock(); fake_bpy.data.objects.new.return_value = light_obj
+    result = cinematic_preset._ensure_cinematic_sun(scene)
+    fake_bpy.data.lights.new.assert_called_once()
+    fake_bpy.data.objects.new.assert_called_once()
+    scene.collection.objects.link.assert_called_once_with(light_obj)
+    assert (light_data.type == "SUN"
+            or fake_bpy.data.lights.new.call_args.kwargs.get("type") == "SUN")
+    assert result is light_obj
+
+
+def test_ensure_cinematic_sun_idempotent(monkeypatch):
+    from blender_tools import cinematic_preset
+    fake_bpy = MagicMock()
+    monkeypatch.setattr(cinematic_preset, "_require_bpy", lambda: fake_bpy)
+    existing_sun = MagicMock(); existing_sun.type = "LIGHT"
+    existing_sun.data = MagicMock(); existing_sun.data.type = "SUN"
+    scene = MagicMock(); scene.objects = [existing_sun]
+    result = cinematic_preset._ensure_cinematic_sun(scene)
+    fake_bpy.data.lights.new.assert_not_called()
+    fake_bpy.data.objects.new.assert_not_called()
+    assert result is existing_sun
