@@ -15,7 +15,6 @@ import pytest
 
 from blender_tools.citygml_import import (
     _citygml_tools_cmd,
-    _collect_vertex_indices,
     _manual_cityjson_import,
     building_z_snap_offset,
     cityjson_to_blender,
@@ -196,47 +195,6 @@ def test_cmd_docker_translates_paths_to_data(tmp_path):
     out = cwd / "test_output.json"
     cmd = _citygml_tools_cmd([gml], out, use_docker=True)
     assert any(arg.startswith("/data/") for arg in cmd if "input" in arg or "output" in arg)
-
-
-# ---------------------------------------------------------------------------
-# _collect_vertex_indices
-# ---------------------------------------------------------------------------
-
-
-def test_collect_flat_list():
-    out: set[int] = set()
-    _collect_vertex_indices([1, 2, 3], out)
-    assert out == {1, 2, 3}
-
-
-def test_collect_nested_list():
-    out: set[int] = set()
-    _collect_vertex_indices([[[0, 1, 2]], [[3, 4, 5]]], out)
-    assert out == {0, 1, 2, 3, 4, 5}
-
-
-def test_collect_mixed_depth():
-    out: set[int] = set()
-    _collect_vertex_indices([[0, [1, [2]]], 3], out)
-    assert out == {0, 1, 2, 3}
-
-
-def test_collect_single_int():
-    out: set[int] = set()
-    _collect_vertex_indices(7, out)
-    assert out == {7}
-
-
-def test_collect_empty_list():
-    out: set[int] = set()
-    _collect_vertex_indices([], out)
-    assert out == set()
-
-
-def test_collect_duplicates_deduped():
-    out: set[int] = set()
-    _collect_vertex_indices([[1, 2], [1, 3]], out)
-    assert out == {1, 2, 3}
 
 
 # ---------------------------------------------------------------------------
@@ -481,6 +439,57 @@ def test_gml_to_cityjson_pure_parses_one_building(tmp_path):
     assert geom["lod"] in {"2", "2.0", 2}
     boundaries = geom["boundaries"]
     assert isinstance(boundaries, list) and len(boundaries) >= 1
+
+
+def test_manual_cityjson_import_creates_faces(tmp_path, monkeypatch):
+    """The fallback importer must create real polygon faces, not point clouds."""
+    from blender_tools.citygml_import import _manual_cityjson_import
+    # Two-triangle pyramid (4 verts, 4 triangle faces).
+    cj = {
+        "type": "CityJSON", "version": "1.1",
+        "CityObjects": {
+            "T1": {"type": "Building", "geometry": [{
+                "type": "Solid", "lod": "2",
+                "boundaries": [[
+                    [[0, 1, 2]],  # bottom triangle (one ring)
+                    [[0, 1, 3]],
+                    [[1, 2, 3]],
+                    [[2, 0, 3]],
+                ]],
+            }]},
+        },
+        "vertices": [[0,0,0],[1,0,0],[0,1,0],[0,0,1]],
+    }
+    src = tmp_path / "pyramid.json"
+    src.write_text(json.dumps(cj), encoding="utf-8")
+
+    # Mock bpy
+    class FakeMesh:
+        def __init__(self, name):
+            self.name = name; self.verts = []; self.faces = []
+        def from_pydata(self, verts, edges, faces):
+            self.verts = verts; self.faces = faces
+        def update(self): pass
+    class FakeObj:
+        def __init__(self, name, mesh): self.name = name; self.data = mesh; self.type = "MESH"
+    class FakeData:
+        def __init__(self): self.meshes = self; self.objects = self; self._items = {}
+        def new(self, name, mesh=None):
+            if mesh is None:
+                m = FakeMesh(name); self._items[name] = m; return m
+            o = FakeObj(name, mesh); self._items[name] = o; return o
+    class FakeColl:
+        def __init__(self): self.objects = self; self._linked = []
+        def link(self, obj): self._linked.append(obj)
+    class FakeBpy:
+        def __init__(self): self.data = FakeData()
+
+    coll = FakeColl()
+    objs = _manual_cityjson_import(FakeBpy(), src, (0,0,0), coll, None)
+    assert len(objs) == 1
+    mesh = objs[0].data
+    assert len(mesh.verts) == 4
+    assert len(mesh.faces) == 4, mesh.faces
 
 
 def test_gml_to_cityjson_pure_real_ldbv(tmp_path):

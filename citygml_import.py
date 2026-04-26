@@ -262,38 +262,51 @@ def _manual_cityjson_import(
     coll: Any,
     terrain_object_name: Optional[str],
 ) -> list[Any]:
-    """Pure-Python CityJSON → Blender fallback when Up3date isn't available.
+    """CityJSON -> Blender meshes with proper face reconstruction.
 
-    Parses the CityJSON file, creates one mesh per CityObject of type 'Building',
-    subtracts anchor before creating vertices. Minimal semantic-surface handling
-    (no material split — leaves that to a follow-up iteration).
+    Walks the CityJSON Solid/MultiSurface boundary nesting and builds one
+    Blender mesh per Building with all polygon faces preserved. Holes inside
+    rings are dropped (LDBV LoD2 buildings rarely have inner rings).
     """
     data = json.loads(cityjson_path.read_text(encoding="utf-8"))
     verts_global = data.get("vertices", [])
-    scale = data.get("transform", {}).get("scale", [1.0, 1.0, 1.0])
-    translate = data.get("transform", {}).get("translate", [0.0, 0.0, 0.0])
+    transform = data.get("transform", {})
+    scale = transform.get("scale", [1.0, 1.0, 1.0])
+    translate = transform.get("translate", [0.0, 0.0, 0.0])
     result: list[Any] = []
+
     for obj_id, obj in data.get("CityObjects", {}).items():
-        if obj.get("type") != "Building":
+        if obj.get("type") not in {"Building", "BuildingPart"}:
             continue
-        # Each geometry has 'boundaries' — a nested list of vertex-index rings.
-        # For the fallback we just gather unique vertex indices per object
-        # and create a point-cloud mesh; topology reconstruction is out of scope.
-        used_idx: set[int] = set()
+        # Collect all face rings across all geometries on this object.
+        faces_global_idx: list[list[int]] = []
         for geom in obj.get("geometry", []):
-            _collect_vertex_indices(geom.get("boundaries", []), used_idx)
-        if not used_idx:
+            _collect_face_rings(geom.get("boundaries", []), geom.get("type"),
+                                faces_global_idx)
+        if not faces_global_idx:
             continue
+
+        # Re-index from global vertex space to local mesh-vertex space.
+        local_idx_for_global: dict[int, int] = {}
+        local_verts: list[tuple[float, float, float]] = []
+        local_faces: list[list[int]] = []
+        for face in faces_global_idx:
+            new_face = []
+            for gi in face:
+                if gi not in local_idx_for_global:
+                    gv = verts_global[gi]
+                    local_idx_for_global[gi] = len(local_verts)
+                    local_verts.append((
+                        (gv[0] * scale[0] + translate[0]) - anchor[0],
+                        (gv[1] * scale[1] + translate[1]) - anchor[1],
+                        (gv[2] * scale[2] + translate[2]) - anchor[2],
+                    ))
+                new_face.append(local_idx_for_global[gi])
+            if len(new_face) >= 3:
+                local_faces.append(new_face)
+
         mesh = bpy.data.meshes.new(f"CityJSON_{obj_id}")
-        verts = [
-            (
-                (verts_global[i][0] * scale[0] + translate[0]) - anchor[0],
-                (verts_global[i][1] * scale[1] + translate[1]) - anchor[1],
-                (verts_global[i][2] * scale[2] + translate[2]) - anchor[2],
-            )
-            for i in used_idx
-        ]
-        mesh.from_pydata(verts, [], [])
+        mesh.from_pydata(local_verts, [], local_faces)
         mesh.update()
         mesh_obj = bpy.data.objects.new(f"CityJSON_{obj_id}", mesh)
         coll.objects.link(mesh_obj)
@@ -301,10 +314,33 @@ def _manual_cityjson_import(
     return result
 
 
-def _collect_vertex_indices(boundary: Any, out: set[int]) -> None:
-    """Recursively collect all ints from a CityJSON nested-list boundary."""
-    if isinstance(boundary, int):
-        out.add(boundary)
-    elif isinstance(boundary, (list, tuple)):
-        for item in boundary:
-            _collect_vertex_indices(item, out)
+def _collect_face_rings(boundary: Any, geom_type: Optional[str],
+                        out: list[list[int]]) -> None:
+    """Walk CityJSON nested boundary lists and append every face's outer ring.
+
+    CityJSON nesting depth depends on geometry type:
+      MultiPoint:    [v0, v1, ...]                                    (depth 1)
+      MultiLineString: [[v0,v1], ...]                                 (depth 2)
+      MultiSurface:  [[[v0,v1,v2], ...], ...]    (face -> rings)      (depth 3)
+      Solid:         [[[[v...], ...], ...], ...] (shell -> faces -> rings) (depth 4)
+      MultiSolid:    [[[[[v...], ...], ...], ...], ...]               (depth 5)
+
+    We only emit the *exterior* ring (first ring of each face). Holes ignored.
+    """
+    if not isinstance(boundary, list):
+        return
+    # Heuristic: descend until we find a list whose first element is an int —
+    # that level holds vertex indices (an exterior ring). Treat its parent
+    # list as a face's ring list and take ring [0].
+    if boundary and isinstance(boundary[0], int):
+        # We are AT a ring. The caller wraps it; should not happen here.
+        out.append(list(boundary))
+        return
+    if boundary and isinstance(boundary[0], list) and boundary[0] \
+            and isinstance(boundary[0][0], int):
+        # We are at a face: [exterior_ring, *interior_rings]
+        out.append(list(boundary[0]))
+        return
+    # Descend.
+    for child in boundary:
+        _collect_face_rings(child, geom_type, out)
