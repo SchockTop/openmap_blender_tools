@@ -30,6 +30,7 @@ HERE = Path(__file__).resolve().parent
 RUNTIME_MODULES = [
     "__init__.py",
     "cli.py",
+    "camera_presets.py",
     "cinematic_preset.py",
     "citygml_import.py",
     "cleanup_pymeshlab.py",
@@ -59,6 +60,12 @@ def assemble(staging: Path, manifest: dict) -> None:
         if not src.exists():
             raise FileNotFoundError(f"Expected runtime module missing: {src}")
         shutil.copy(src, staging / rel)
+
+    # 2b. Copy features/ subpackage as a directory tree.
+    features_src = HERE / "features"
+    if features_src.is_dir():
+        shutil.copytree(features_src, staging / "features",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
 
     # 3. Copy wheels declared in manifest.
     wheels_dir = staging / "wheels"
