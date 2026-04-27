@@ -70,3 +70,34 @@ def test_apply_detects_existing_drape_and_combines(monkeypatch):
     out = ground_shader.apply({"bpy": fake_bpy, "terrain_obj": terrain})
     assert captured["base"] is drape_mat
     assert out["ground_shader_combined_with_drape"] is True
+
+
+def test_apply_uses_wave_not_brick_for_field_layer(monkeypatch):
+    """The field layer must use a Wave texture, not Brick (cobblestone-look)."""
+    ground_shader = _import_feature()
+
+    nodes_created = []
+    class FakeNodes:
+        def __init__(self): self._items = []
+        def new(self, t):
+            n = MagicMock(); n.location = (0, 0); n.inputs = MagicMock(); n.outputs = MagicMock()
+            n.type = t.replace("ShaderNode", "")
+            self._items.append(n); nodes_created.append(t); return n
+        def clear(self): self._items.clear()
+        def __iter__(self): return iter(self._items)
+    class FakeMat:
+        def __init__(self, name):
+            self.name = name; self.use_nodes = True
+            self.node_tree = MagicMock()
+            self.node_tree.nodes = FakeNodes()
+            self.node_tree.links = MagicMock()
+    fake_bpy = MagicMock()
+    fake_bpy.data.materials.__contains__ = lambda self, name: False
+    fake_bpy.data.materials.new = lambda name: FakeMat(name)
+    fake_bpy.data.materials.remove = lambda m: None
+
+    ground_shader._build_procedural_ground_material(fake_bpy, base_image_material=None)
+    # Should have created a Wave node, NOT a Brick node.
+    assert "ShaderNodeTexWave" in nodes_created, f"Wave node not used: {nodes_created}"
+    assert "ShaderNodeTexBrick" not in nodes_created or nodes_created.count("ShaderNodeTexBrick") == 0, \
+        f"field layer still uses Brick (cobblestone): {nodes_created}"

@@ -69,12 +69,26 @@ def _build_procedural_ground_material(bpy, base_image_material=None):
     forest_ramp.color_ramp.elements[1].color = (0.30, 0.22, 0.14, 1)
     nt.links.new(forest_noise.outputs["Fac"], forest_ramp.inputs["Fac"])
 
-    # --- Layer 4: Field (Brick texture for furrows + ochre) ---
-    field_brick = nt.nodes.new("ShaderNodeTexBrick"); field_brick.location = (-1200, -300)
-    field_brick.inputs["Color1"].default_value = (0.55, 0.48, 0.30, 1)
-    field_brick.inputs["Color2"].default_value = (0.62, 0.54, 0.34, 1)
-    field_brick.inputs["Mortar"].default_value = (0.40, 0.35, 0.22, 1)
-    field_brick.inputs["Scale"].default_value = 12.0
+    # --- Layer 4: Field (Wave texture for parallel furrows + earthy ochre/brown) ---
+    field_wave = nt.nodes.new("ShaderNodeTexWave"); field_wave.location = (-1200, -300)
+    field_wave.wave_type = "BANDS"
+    try:
+        field_wave.bands_direction = "X"
+    except (AttributeError, TypeError):
+        pass  # older Blender API may not have bands_direction
+    field_wave.inputs["Scale"].default_value = 8.0
+    field_wave.inputs["Distortion"].default_value = 1.5
+    field_wave.inputs["Detail"].default_value = 5.0
+    field_wave.inputs["Detail Scale"].default_value = 1.0
+
+    # Two-color ramp: wet brown (low) -> dry ochre (high)
+    field_ramp = nt.nodes.new("ShaderNodeValToRGB"); field_ramp.location = (-1000, -300)
+    # Position the elements wider for sharper furrow contrast.
+    field_ramp.color_ramp.elements[0].position = 0.3
+    field_ramp.color_ramp.elements[0].color = (0.42, 0.30, 0.18, 1)  # wet brown furrow base
+    field_ramp.color_ramp.elements[1].position = 0.7
+    field_ramp.color_ramp.elements[1].color = (0.65, 0.55, 0.32, 1)  # dry ochre crest
+    nt.links.new(field_wave.outputs["Color"], field_ramp.inputs["Fac"])
 
     # --- Slope mask via Geometry > Normal ---
     geom = nt.nodes.new("ShaderNodeNewGeometry"); geom.location = (-1500, -100)
@@ -126,7 +140,7 @@ def _build_procedural_ground_material(bpy, base_image_material=None):
     mix_field.blend_type = "MIX"
     nt.links.new(field_alt_ramp.outputs["Color"], mix_field.inputs["Fac"])
     nt.links.new(mix_fr.outputs["Color"], mix_field.inputs["Color1"])
-    nt.links.new(field_brick.outputs["Color"], mix_field.inputs["Color2"])
+    nt.links.new(field_ramp.outputs["Color"], mix_field.inputs["Color2"])
 
     # --- BSDF + Output ---
     bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled"); bsdf.location = (200, 0)
