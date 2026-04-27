@@ -189,6 +189,38 @@ def test_apply_camera_preset_removes_damped_track_so_tilt_applies(monkeypatch):
     constraints_mock.remove.assert_called_once_with(constraint)
 
 
+def test_each_preset_has_curve_start_frame_pct():
+    from blender_tools.camera_presets import CAMERA_PRESETS
+    for name, p in CAMERA_PRESETS.items():
+        pct = p.get("curve_start_frame_pct")
+        assert pct is not None, f"{name!r} missing curve_start_frame_pct"
+        assert 0.0 <= pct <= 1.0, f"{name!r} pct out of range: {pct}"
+
+    # Verify monotonic ordering: fpv-walk earliest, aircraft latest.
+    order = ["fpv-walk", "fpv-bike", "low-drone", "mid-drone",
+             "cinematic-establishing", "aircraft-approach"]
+    pcts = [CAMERA_PRESETS[n]["curve_start_frame_pct"] for n in order]
+    for i in range(1, len(pcts)):
+        assert pcts[i] >= pcts[i-1], f"non-monotonic: {pcts}"
+
+
+def test_apply_camera_preset_calls_frame_set(monkeypatch):
+    """When a curve is given, frame_set must be called with the per-preset offset."""
+    from blender_tools import camera_presets
+    from unittest.mock import MagicMock
+    cam = MagicMock(); cam.type = "CAMERA"; cam.data = MagicMock()
+    cam.parent = None; cam.animation_data = None
+    cam.constraints = MagicMock(); cam.constraints.__iter__ = lambda s: iter([])
+    curve = MagicMock(); curve.type = "CURVE"
+    curve.data.splines = []
+    curve.data.path_duration = 100
+    scene = MagicMock(); scene.render.fps = 25.0
+    camera_presets.apply_camera_preset(cam, "aircraft-approach", scene=scene,
+                                        curve_obj=curve, terrain_z=520.0)
+    # aircraft-approach has curve_start_frame_pct=0.85 -> eval_frame = 85
+    scene.frame_set.assert_called_with(85)
+
+
 def test_preset_altitudes_are_monotonically_distinct():
     """Sanity: each preset altitude is meaningfully different so renders differ."""
     from blender_tools.camera_presets import CAMERA_PRESETS

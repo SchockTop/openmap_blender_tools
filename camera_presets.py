@@ -33,6 +33,7 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
         "noise_amplitude_deg": 0.5,    # subtle handheld feel
         "shutter_open": 0.5,           # 180-degree shutter (filmic motion blur)
         "tilt_pitch_deg": -5.0,        # slight uplook so horizon shows at top
+        "curve_start_frame_pct": 0.0,  # start of path
         "use_case": "Walking through fields/bushes; GoPro chest-mount equivalent",
     },
     "fpv-bike": {
@@ -45,6 +46,7 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
         "noise_amplitude_deg": 0.3,
         "shutter_open": 0.5,
         "tilt_pitch_deg": 0.0,         # level forward
+        "curve_start_frame_pct": 0.2,  # early portion
         "use_case": "Bike-mount FPV; wider lens for speed feel",
     },
     "low-drone": {
@@ -57,6 +59,7 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
         "noise_amplitude_deg": 0.05,
         "shutter_open": 0.5,
         "tilt_pitch_deg": -10.0,       # slight downlook over building
+        "curve_start_frame_pct": 0.4,  # middle-low
         "use_case": "Building facade reveal; Mavic-class flight",
     },
     "mid-drone": {
@@ -69,6 +72,7 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
         "noise_amplitude_deg": 0.05,
         "shutter_open": 0.5,
         "tilt_pitch_deg": -15.0,       # moderate downlook for survey angle
+        "curve_start_frame_pct": 0.5,  # middle
         "use_case": "Corporate establishing; Inspire-class survey",
     },
     "cinematic-establishing": {
@@ -81,6 +85,7 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
         "noise_amplitude_deg": 0.05,
         "shutter_open": 0.5,
         "tilt_pitch_deg": -45.0,       # was -20 - aim camera down at city
+        "curve_start_frame_pct": 0.6,  # past middle
         "use_case": "Feature-film opener - current default",
     },
     "aircraft-approach": {
@@ -93,6 +98,7 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
         "noise_amplitude_deg": 0.02,
         "shutter_open": 0.5,
         "tilt_pitch_deg": -45.0,       # steep down for high-altitude reveal
+        "curve_start_frame_pct": 0.85, # near end
         "use_case": "Telephoto reveal - atmospheric compression",
     },
 }
@@ -172,6 +178,16 @@ def apply_camera_preset(camera_obj: Any,
                 # Re-keyframe eval_time linearly (uses the existing helper).
                 from . import waypoints_to_camera as _w2c
                 _w2c.keyframe_constant_velocity(curve_obj.data)
+
+    # Per-preset start frame on the curve (so different presets sample different
+    # XY positions, not just different lens/tilt/altitude).
+    if curve_obj is not None and curve_obj.type == "CURVE":
+        pct = float(p.get("curve_start_frame_pct", 0.0))
+        pct = max(0.0, min(1.0, pct))
+        eval_frame = pct * float(curve_obj.data.path_duration)
+        # Override scene frame so the Follow Path constraint evaluates at that point.
+        if scene is not None:
+            scene.frame_set(int(eval_frame) if eval_frame >= 1 else 1)
 
     # Motion blur (shutter).
     if scene is not None:
