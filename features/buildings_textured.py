@@ -102,7 +102,7 @@ def _make_roof_material(bpy, bbox, ortho_dir):
 
     # Warm tile palette (terra-cotta red-orange). Mixed with DOP for variation.
     tile_color = nt.nodes.new("ShaderNodeRGB")
-    tile_color.outputs[0].default_value = (0.65, 0.22, 0.12, 1.0)  # warm terra-cotta
+    tile_color.outputs[0].default_value = (0.62, 0.30, 0.20, 1.0)  # warm terra-cotta (less aggressive red)
 
     # Per-building hue jitter so roofs aren't all identical.
     obj_info = nt.nodes.new("ShaderNodeObjectInfo")

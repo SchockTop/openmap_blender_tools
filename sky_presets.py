@@ -32,7 +32,7 @@ SKY_PRESETS: dict[str, dict[str, Any]] = {
         "sun_color_rgb": (1.0, 0.78, 0.55),  # warm orange
         "sky_strength": 1.2,
         "sky_air_density": 2.5,         # extra atmospheric scattering
-        "exposure_offset": 1.0,
+        "exposure_offset": 0.5,
     },
     "blue-hour": {
         "label": "Blue hour (post-sunset twilight) — cool ambient, no direct sun",

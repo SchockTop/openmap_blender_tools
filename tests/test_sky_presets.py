@@ -35,7 +35,7 @@ def test_apply_sky_preset_sets_sun_attributes():
     apply_sky_preset(scene, "golden-hour")
     assert sun.data.energy == 50.0  # golden-hour energy after exposure-tuning fix
     assert tuple(sun.data.color) == (1.0, 0.78, 0.55)
-    assert scene.view_settings.exposure == 1.0  # golden-hour exposure after tuning
+    assert scene.view_settings.exposure == 0.5  # golden-hour exposure after oversaturation dial-back
 
 
 def test_apply_sky_preset_warns_on_missing_sun(capsys):

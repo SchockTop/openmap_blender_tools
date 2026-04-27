@@ -111,7 +111,10 @@ def apply_cinematic_preset(scene: Any,
 
     # AgX (Blender 5.x default but explicit for repro).
     scene.view_settings.view_transform = "AgX"
-    scene.view_settings.look = "AgX - Medium High Contrast"
+    try:
+        scene.view_settings.look = "AgX - Base Contrast"  # was "Medium High Contrast" — too punchy
+    except Exception:
+        scene.view_settings.look = ""
 
     # Exposure compensation — AgX is conservative on highlights, so bump
     # the scene exposure +1.5 stops for a brighter cinematic look.
