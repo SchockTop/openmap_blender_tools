@@ -53,3 +53,8 @@ def test_apply_publishes_template_count_and_mod_name(monkeypatch):
     out = trees.apply({"bpy": fake_bpy, "terrain_obj": terrain})
     assert out["trees_template_count"] == 3
     assert out["trees_modifier_name"] == "TreeScatter"
+
+
+def test_tree_template_has_rich_geometry_in_real_blender():
+    """Smoke — only runs in real Blender, skipped in pytest."""
+    pytest.skip("real-Blender test; covered by manual smoke render")

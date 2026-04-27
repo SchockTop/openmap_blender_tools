@@ -142,79 +142,120 @@ def _create_tree(bpy, name, height, leaf_rgb):
         tree.data.materials.append(mat)
         return tree
     except Exception as e:
-        print(f"[trees] Sapling failed for {name}: {e}; using cone+sphere placeholder")
+        print(f"[trees] Sapling failed for {name}: {e}; using procedural primitive tree")
 
-    # --- TRUNK: 8-sided cone, brown PBR ---
-    bpy.ops.mesh.primitive_cone_add(
-        vertices=8,
-        radius1=0.3, radius2=0.15,
-        depth=height * 0.4,
-        location=(0, 0, height * 0.2),
-    )
-    trunk = bpy.context.active_object
-    trunk.name = "TempTrunk"
-    trunk_mat = bpy.data.materials.new(f"TreeBark_{name}")
-    trunk_mat.use_nodes = True
-    bsdf = trunk_mat.node_tree.nodes.get("Principled BSDF")
-    if bsdf:
-        bsdf.inputs["Base Color"].default_value = (0.25, 0.18, 0.12, 1.0)
-        bsdf.inputs["Roughness"].default_value = 0.95
-    trunk.data.materials.append(trunk_mat)
+        # --- TRUNK: tapered 8-sided cylinder ---
+        bpy.ops.mesh.primitive_cylinder_add(
+            vertices=8,
+            radius=0.3,
+            depth=height * 0.4,
+            location=(0, 0, height * 0.2),
+        )
+        trunk = bpy.context.active_object
+        trunk.name = "TempTrunk"
+        # Taper top: scale top-half vertices in XY toward center.
+        import bmesh
+        me = trunk.data
+        bm = bmesh.new()
+        bm.from_mesh(me)
+        for v in bm.verts:
+            if v.co.z > 0:  # top half (cylinder is centered, top is +Z)
+                v.co.x *= 0.6
+                v.co.y *= 0.6
+        bm.to_mesh(me)
+        bm.free()
+        # Bark material.
+        trunk_mat = bpy.data.materials.new(f"TreeBark_{name}")
+        trunk_mat.use_nodes = True
+        bsdf = trunk_mat.node_tree.nodes.get("Principled BSDF")
+        if bsdf:
+            bsdf.inputs["Base Color"].default_value = (0.25, 0.18, 0.12, 1.0)
+            bsdf.inputs["Roughness"].default_value = 0.95
+        trunk.data.materials.append(trunk_mat)
 
-    # --- FOLIAGE: icosphere with Voronoi displace for organic outline ---
-    bpy.ops.mesh.primitive_ico_sphere_add(
-        subdivisions=2,
-        radius=height * 0.5,
-        location=(0, 0, height * 0.65),
-    )
-    foliage = bpy.context.active_object
-    foliage.name = "TempFoliage"
-    tex = bpy.data.textures.new(f"TreeFoliage_{name}_disp", type="VORONOI")
-    try:
-        tex.noise_scale = 0.4
-    except Exception:
-        pass
-    disp = foliage.modifiers.new("Disp", "DISPLACE")
-    disp.texture = tex
-    disp.strength = height * 0.05
-    # Apply the displace so it bakes into the mesh.
-    bpy.ops.object.select_all(action="DESELECT")
-    foliage.select_set(True)
-    bpy.context.view_layer.objects.active = foliage
-    try:
-        bpy.ops.object.modifier_apply(modifier="Disp")
-    except Exception as ee:
-        print(f"[trees] modifier_apply failed for {name}: {ee}")
-    # Slight per-axis jitter so trees aren't perfectly symmetric.
-    jitter_y = 0.9 + (hash(name) % 30) / 100.0
-    jitter_z = 1.0 + (hash(name) % 20) / 100.0
-    foliage.scale = (1.0, jitter_y, jitter_z)
-    try:
-        bpy.ops.object.transform_apply(scale=True)
-    except Exception:
-        pass
-    foliage_mat = bpy.data.materials.new(f"TreeLeaf_{name}")
-    foliage_mat.use_nodes = True
-    bsdf = foliage_mat.node_tree.nodes.get("Principled BSDF")
-    if bsdf:
+        # --- FOLIAGE CLUSTER: 5 small icospheres at upper trunk ---
+        import random as _rnd
+        import math as _math
+        rng = _rnd.Random(hash(name) & 0xffff)
+        foliage_objs = []
+        cluster_centre_z = height * 0.7
+        cluster_radius_each = height * 0.30
+        for i in range(5):
+            # Offset each subsphere within a small XY radius.
+            ang = i * (2 * 3.14159 / 5)
+            r_off = cluster_radius_each * 0.55
+            x_off = r_off * _math.cos(ang) + rng.uniform(-0.1, 0.1) * height
+            y_off = r_off * _math.sin(ang) + rng.uniform(-0.1, 0.1) * height
+            z_off = cluster_centre_z + rng.uniform(-0.1, 0.1) * height
+            bpy.ops.mesh.primitive_ico_sphere_add(
+                subdivisions=2,
+                radius=cluster_radius_each * rng.uniform(0.7, 1.0),
+                location=(x_off, y_off, z_off),
+            )
+            sub = bpy.context.active_object
+            sub.name = f"TempFoliage_{i}"
+            # Voronoi displace for organic outline.
+            tex = bpy.data.textures.new(f"FolDisp_{name}_{i}", type="VORONOI")
+            tex.noise_scale = 0.4
+            disp = sub.modifiers.new("Disp", "DISPLACE")
+            disp.texture = tex
+            disp.strength = height * 0.04
+            bpy.ops.object.select_all(action="DESELECT")
+            sub.select_set(True); bpy.context.view_layer.objects.active = sub
+            try:
+                bpy.ops.object.modifier_apply(modifier="Disp")
+            except Exception:
+                pass
+            foliage_objs.append(sub)
+
+        # --- 3 SHORT BRANCHES sticking out of upper trunk ---
+        for i in range(3):
+            ang = i * (2 * 3.14159 / 3) + rng.uniform(-0.3, 0.3)
+            tilt_pitch = 1.2 + rng.uniform(-0.2, 0.2)  # ~70 deg from vertical
+            length = height * 0.25
+            base_z = height * 0.55 + rng.uniform(-0.05, 0.05) * height
+            bpy.ops.mesh.primitive_cylinder_add(
+                vertices=6,
+                radius=0.08,
+                depth=length,
+                location=(_math.cos(ang) * length * 0.4,
+                          _math.sin(ang) * length * 0.4,
+                          base_z),
+                rotation=(tilt_pitch * _math.sin(ang),
+                          -tilt_pitch * _math.cos(ang),
+                          0),
+            )
+            branch = bpy.context.active_object
+            branch.name = f"TempBranch_{i}"
+            branch.data.materials.append(trunk_mat)
+            foliage_objs.append(branch)  # join with foliage to be one object
+
+        # --- LEAF MATERIAL with green-channel boost ---
         boosted_rgb = (
             leaf_rgb[0],
-            min(1.0, leaf_rgb[1] * 1.3),  # punch up green for distance legibility
+            min(1.0, leaf_rgb[1] * 1.3),
             leaf_rgb[2],
         )
-        bsdf.inputs["Base Color"].default_value = (*boosted_rgb, 1.0)
-        bsdf.inputs["Roughness"].default_value = 0.9
-    foliage.data.materials.append(foliage_mat)
+        foliage_mat = bpy.data.materials.new(f"TreeLeaf_{name}")
+        foliage_mat.use_nodes = True
+        bsdf = foliage_mat.node_tree.nodes.get("Principled BSDF")
+        if bsdf:
+            bsdf.inputs["Base Color"].default_value = (*boosted_rgb, 1.0)
+            bsdf.inputs["Roughness"].default_value = 0.9
+        # Apply leaf material to each foliage sub (NOT branches).
+        for fobj in foliage_objs[:5]:  # only the 5 leaf clusters
+            fobj.data.materials.clear()
+            fobj.data.materials.append(foliage_mat)
 
-    # --- JOIN trunk + foliage (trunk first so its material slot 0 = bark) ---
-    bpy.ops.object.select_all(action="DESELECT")
-    trunk.select_set(True)
-    foliage.select_set(True)
-    bpy.context.view_layer.objects.active = trunk
-    bpy.ops.object.join()
-    tree = bpy.context.active_object
-    tree.name = f"TreeTpl_{name}"
-    return tree
+        # --- JOIN trunk + 5 foliage + 3 branches into ONE object ---
+        bpy.ops.object.select_all(action="DESELECT")
+        for o in [trunk] + foliage_objs:
+            o.select_set(True)
+        bpy.context.view_layer.objects.active = trunk
+        bpy.ops.object.join()
+        tree = bpy.context.active_object
+        tree.name = f"TreeTpl_{name}"
+        return tree
 
 
 def _attach_or_replace_gn_scatter(bpy, terrain, template_collection):
