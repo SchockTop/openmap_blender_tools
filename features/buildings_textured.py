@@ -104,12 +104,22 @@ def _make_roof_material(bpy, bbox, ortho_dir):
     tile_color = nt.nodes.new("ShaderNodeRGB")
     tile_color.outputs[0].default_value = (0.62, 0.30, 0.20, 1.0)  # warm terra-cotta (less aggressive red)
 
-    # Per-building hue jitter so roofs aren't all identical.
+    # Per-building hue jitter so roofs aren't all identical — but RESTRICTED
+    # to ±5% hue shift so colors stay in the red-orange-brown family. Without
+    # the Map Range, Object Info Random output 0..1 means full color-wheel
+    # rotation per building → wild rainbow buildings.
     obj_info = nt.nodes.new("ShaderNodeObjectInfo")
+    map_range = nt.nodes.new("ShaderNodeMapRange")
+    map_range.inputs["From Min"].default_value = 0.0
+    map_range.inputs["From Max"].default_value = 1.0
+    map_range.inputs["To Min"].default_value = 0.45
+    map_range.inputs["To Max"].default_value = 0.55
+    nt.links.new(obj_info.outputs["Random"], map_range.inputs["Value"])
+
     hsv = nt.nodes.new("ShaderNodeHueSaturation")
     hsv.inputs["Saturation"].default_value = 1.2
     nt.links.new(tile_color.outputs[0], hsv.inputs["Color"])
-    nt.links.new(obj_info.outputs["Random"], hsv.inputs["Hue"])
+    nt.links.new(map_range.outputs["Result"], hsv.inputs["Hue"])
 
     # Mix DOP (when available) with the tile color (DOP gives variation, tile gives warm hue).
     mix = nt.nodes.new("ShaderNodeMixRGB")
