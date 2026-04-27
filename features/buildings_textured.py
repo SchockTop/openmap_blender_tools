@@ -78,6 +78,13 @@ def apply(context):
 
 
 def _make_roof_material(bpy, bbox, ortho_dir):
+    """Roof material — DOP-projected ortho TINTED with warm German tile palette.
+
+    The München DOP is mostly grey/concrete from above, so we Mix the DOP
+    color with a saturated red-orange tile color (terra-cotta) so roofs
+    visually read as roofs at any altitude. Per-building colour variation via
+    Object Info > Random hue shift.
+    """
     name = "BldRoof_DOP"
     if name in bpy.data.materials:
         return bpy.data.materials[name]
@@ -92,10 +99,31 @@ def _make_roof_material(bpy, bbox, ortho_dir):
     coord = nt.nodes.new("ShaderNodeTexCoord")
     nt.links.new(coord.outputs["Generated"], mapping.inputs["Vector"])
     nt.links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
-    nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+
+    # Warm tile palette (terra-cotta red-orange). Mixed with DOP for variation.
+    tile_color = nt.nodes.new("ShaderNodeRGB")
+    tile_color.outputs[0].default_value = (0.65, 0.22, 0.12, 1.0)  # warm terra-cotta
+
+    # Per-building hue jitter so roofs aren't all identical.
+    obj_info = nt.nodes.new("ShaderNodeObjectInfo")
+    hsv = nt.nodes.new("ShaderNodeHueSaturation")
+    hsv.inputs["Saturation"].default_value = 1.2
+    nt.links.new(tile_color.outputs[0], hsv.inputs["Color"])
+    nt.links.new(obj_info.outputs["Random"], hsv.inputs["Hue"])
+
+    # Mix DOP (when available) with the tile color (DOP gives variation, tile gives warm hue).
+    mix = nt.nodes.new("ShaderNodeMixRGB")
+    mix.blend_type = "MULTIPLY"
+    mix.inputs["Fac"].default_value = 0.7   # tile dominant; DOP just adds detail
+    nt.links.new(hsv.outputs["Color"], mix.inputs["Color1"])
+    nt.links.new(tex.outputs["Color"], mix.inputs["Color2"])
+
+    nt.links.new(mix.outputs["Color"], bsdf.inputs["Base Color"])
     nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
     bsdf.inputs["Roughness"].default_value = 0.85
-    # Load the DOP UDIM image if available.
+
+    # Load the DOP UDIM image if available; if not, the tile color stands alone
+    # (the MULTIPLY against a white-ish missing texture still works).
     if ortho_dir:
         from pathlib import Path
         tiles = sorted(Path(ortho_dir).glob("ortho.*.jpg"))
@@ -109,6 +137,9 @@ def _make_roof_material(bpy, bbox, ortho_dir):
                 except Exception:
                     pass
             tex.image = img
+    else:
+        # No DOP: bypass the multiply, use tile color directly.
+        nt.links.new(hsv.outputs["Color"], bsdf.inputs["Base Color"])
     return mat
 
 
