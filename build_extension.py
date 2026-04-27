@@ -34,6 +34,7 @@ RUNTIME_MODULES = [
     "cinematic_preset.py",
     "citygml_import.py",
     "cleanup_pymeshlab.py",
+    "csv_curve_import.py",
     "geo_import.py",
     "hidden_geo_cull.py",
     "ndvi_scatter.py",

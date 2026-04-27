@@ -13,6 +13,7 @@ from bpy.props import (
     EnumProperty,
     IntProperty,
     BoolProperty,
+    FloatProperty,
 )
 
 import subprocess
@@ -156,6 +157,90 @@ class BLENDERTOOLS_OT_full_pipeline(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class BLENDERTOOLS_OT_import_csv_path(bpy.types.Operator):
+    """Import a CSV file as a Bezier path."""
+
+    bl_idname = "blender_tools.import_csv_path"
+    bl_label = "Import CSV as path"
+    bl_options = {"REGISTER", "UNDO"}
+
+    filepath: StringProperty(subtype="FILE_PATH")
+    filter_glob: StringProperty(default="*.csv", options={"HIDDEN"})
+    name: StringProperty(name="Curve name", default="ImportedPath")
+    use_scene_anchor: BoolProperty(
+        name="Use scene anchor (utm32n_anchor)",
+        description="Subtract the scene's stored utm32n_anchor for float32 precision",
+        default=True,
+    )
+
+    def execute(self, context):
+        from . import csv_curve_import
+        anchor = (0.0, 0.0, 0.0)
+        if self.use_scene_anchor and "utm32n_anchor" in context.scene:
+            anchor = tuple(context.scene["utm32n_anchor"])
+        try:
+            curve = csv_curve_import.csv_to_blender_curve(
+                self.filepath, anchor_utm32n=anchor, name=self.name)
+        except Exception as e:
+            self.report({"ERROR"}, f"CSV import failed: {e}")
+            return {"CANCELLED"}
+        bpy.ops.object.select_all(action="DESELECT")
+        curve.select_set(True)
+        context.view_layer.objects.active = curve
+        self.report({"INFO"}, f"Imported {curve.name}; select an object then Attach to Path")
+        return {"FINISHED"}
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+
+class BLENDERTOOLS_OT_attach_to_path(bpy.types.Operator):
+    """Attach the active object to the selected curve (or single curve in scene)."""
+
+    bl_idname = "blender_tools.attach_to_path"
+    bl_label = "Attach selected object to path"
+    bl_options = {"REGISTER", "UNDO"}
+
+    speed_mps: FloatProperty(name="Speed (m/s)", default=10.0, min=0.0)
+    fps: FloatProperty(name="FPS", default=25.0, min=1.0)
+    heading_axis: EnumProperty(
+        name="Forward axis",
+        items=[
+            ("TRACK_NEGATIVE_Y", "-Y (Blender default)", ""),
+            ("FORWARD_X", "+X", ""),
+            ("FORWARD_Y", "+Y", ""),
+            ("FORWARD_Z", "+Z", ""),
+        ],
+        default="TRACK_NEGATIVE_Y",
+    )
+
+    def execute(self, context):
+        from . import csv_curve_import
+        obj = context.active_object
+        if obj is None:
+            self.report({"ERROR"}, "No active object - select something to attach")
+            return {"CANCELLED"}
+        curves = [o for o in context.selected_objects if o.type == "CURVE" and o is not obj]
+        if not curves:
+            curves = [o for o in bpy.data.objects if o.type == "CURVE"]
+        if not curves:
+            self.report({"ERROR"}, "No curve found - import a CSV path first")
+            return {"CANCELLED"}
+        curve = curves[0]
+        if obj.type == "CURVE":
+            self.report({"ERROR"}, "Active object is a curve; select the OBJECT to attach (mesh/empty)")
+            return {"CANCELLED"}
+        result = csv_curve_import.attach_object_to_curve(
+            obj, curve, fps=self.fps, speed_mps=self.speed_mps,
+            heading_axis=self.heading_axis,
+        )
+        self.report({"INFO"}, f"Attached {obj.name} to {curve.name}: "
+                              f"{result['arc_length_m']:.0f} m / "
+                              f"{result['duration_frames']} frames")
+        return {"FINISHED"}
+
+
 class BLENDERTOOLS_PT_panel(bpy.types.Panel):
     bl_label = "OpenMap Workflow"
     bl_idname = "BLENDERTOOLS_PT_panel"
@@ -172,6 +257,10 @@ class BLENDERTOOLS_PT_panel(bpy.types.Panel):
         col.operator(BLENDERTOOLS_OT_setup_sky.bl_idname)
         col.operator(BLENDERTOOLS_OT_add_domain_cube.bl_idname)
         col.operator(BLENDERTOOLS_OT_cull_hidden.bl_idname)
+        col.separator()
+        col.label(text="Animation:")
+        col.operator(BLENDERTOOLS_OT_import_csv_path.bl_idname, icon="CURVE_DATA")
+        col.operator(BLENDERTOOLS_OT_attach_to_path.bl_idname, icon="CON_FOLLOWPATH")
 
 
 class BLENDERTOOLS_MT_main_menu(bpy.types.Menu):
@@ -195,6 +284,8 @@ CLASSES = (
     BLENDERTOOLS_OT_add_domain_cube,
     BLENDERTOOLS_OT_cull_hidden,
     BLENDERTOOLS_OT_full_pipeline,
+    BLENDERTOOLS_OT_import_csv_path,
+    BLENDERTOOLS_OT_attach_to_path,
     BLENDERTOOLS_MT_main_menu,
     BLENDERTOOLS_PT_panel,
 )
