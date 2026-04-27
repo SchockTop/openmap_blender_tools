@@ -20,6 +20,11 @@ _CITYGML_NS = {
     "gml":  "http://www.opengis.net/gml",
 }
 
+# Order matters: CityJSON `semantics.values` are indices into this list.
+# Slot mapping in features/buildings_textured.py is: 0=Roof, 1=Wall, 2=Ground.
+SEMANTIC_SURFACE_TYPES = ("RoofSurface", "WallSurface", "GroundSurface")
+TYPE_TO_SLOT = {"RoofSurface": 0, "WallSurface": 1, "GroundSurface": 2}
+
 
 def _parse_pos_list(text: str, srs_dim: int = 3) -> list[tuple[float, float, float]]:
     """Split a gml:posList text blob into (x, y, z) tuples (z=0 for 2D)."""
@@ -69,6 +74,30 @@ def gml_to_cityjson_pure(input_gmls: list[Path], output_json: Path) -> Path:
         "/{http://www.opengis.net/gml}posList"
     )
 
+    # Surface-type tags (both CityGML 1.0 and 2.0 namespaces).
+    surface_tag_variants = {}
+    for type_name in SEMANTIC_SURFACE_TYPES:
+        surface_tag_variants[type_name] = (
+            f"{{http://www.opengis.net/citygml/building/2.0}}{type_name}",
+            f"{{http://www.opengis.net/citygml/building/1.0}}{type_name}",
+        )
+    bounded_by_tags = (
+        "{http://www.opengis.net/citygml/building/2.0}boundedBy",
+        "{http://www.opengis.net/citygml/building/1.0}boundedBy",
+    )
+
+    def _poly_to_ring_idx(poly):
+        ring = poly.find(poslist_xpath)
+        if ring is None or ring.text is None:
+            return None
+        srs_dim = int(ring.get("srsDimension", "3"))
+        pts = _parse_pos_list(ring.text, srs_dim)
+        if pts and pts[0] == pts[-1]:
+            pts = pts[:-1]
+        if len(pts) < 3:
+            return None
+        return [_vertex_index(p, vertex_pool, vertices) for p in pts]
+
     for gml_path in input_gmls:
         tree = ET.parse(gml_path)
         root = tree.getroot()
@@ -77,20 +106,58 @@ def gml_to_cityjson_pure(input_gmls: list[Path], output_json: Path) -> Path:
             buildings.extend(root.iter(tag))
         for bldg in buildings:
             bid = bldg.get("{http://www.opengis.net/gml}id") or f"bldg_{len(city_objects)}"
+
+            # Semantic path: collect polygons grouped by their bounding surface type.
+            semantic_polys: dict[int, list[list[int]]] = {0: [], 1: [], 2: []}
+            polys_in_semantic_path: set[int] = set()
+            bounded_by_elems: list = []
+            for bb_tag in bounded_by_tags:
+                bounded_by_elems.extend(bldg.iter(bb_tag))
+            for bb in bounded_by_elems:
+                for type_idx, type_name in enumerate(SEMANTIC_SURFACE_TYPES):
+                    for sfc_tag in surface_tag_variants[type_name]:
+                        for sfc in bb.iter(sfc_tag):
+                            for poly in sfc.iter(poly_tag):
+                                ring_idx = _poly_to_ring_idx(poly)
+                                if ring_idx is None:
+                                    continue
+                                semantic_polys[type_idx].append(ring_idx)
+                                polys_in_semantic_path.add(id(poly))
+
+            has_semantics = any(semantic_polys[i] for i in semantic_polys)
+            if has_semantics:
+                # Emit MultiSurface with semantics. Order faces by surface type so
+                # `values` aligns with `boundaries`.
+                boundaries: list = []
+                semantics_values: list[int] = []
+                for type_idx in (0, 1, 2):
+                    for ring_idx in semantic_polys[type_idx]:
+                        boundaries.append([ring_idx])  # face = [exterior_ring]
+                        semantics_values.append(type_idx)
+                if not boundaries:
+                    continue
+                city_objects[bid] = {
+                    "type": "Building",
+                    "geometry": [{
+                        "type": "MultiSurface",
+                        "lod": "2",
+                        "boundaries": boundaries,
+                        "semantics": {
+                            "surfaces": [{"type": t} for t in SEMANTIC_SURFACE_TYPES],
+                            "values": semantics_values,
+                        },
+                    }],
+                }
+                continue
+
+            # Fallback: no semantic surfaces → walk every Polygon under the building
+            # and emit a Solid (existing behaviour, preserves backward compat).
             polys: list[list[int]] = []
             for poly in bldg.iter(poly_tag):
-                ring = poly.find(poslist_xpath)
-                if ring is None or ring.text is None:
+                ring_idx = _poly_to_ring_idx(poly)
+                if ring_idx is None:
                     continue
-                srs_dim = int(ring.get("srsDimension", "3"))
-                pts = _parse_pos_list(ring.text, srs_dim)
-                # CityGML rings repeat the first point at the end — drop it.
-                if pts and pts[0] == pts[-1]:
-                    pts = pts[:-1]
-                if len(pts) < 3:
-                    continue
-                ring_idx = [_vertex_index(p, vertex_pool, vertices) for p in pts]
-                polys.append([ring_idx])  # single exterior ring (no holes)
+                polys.append([ring_idx])
             if not polys:
                 continue
             city_objects[bid] = {
@@ -278,11 +345,25 @@ def _manual_cityjson_import(
     for obj_id, obj in data.get("CityObjects", {}).items():
         if obj.get("type") not in {"Building", "BuildingPart"}:
             continue
-        # Collect all face rings across all geometries on this object.
+        # Collect all face rings + their semantic slot (-1 = unknown).
         faces_global_idx: list[list[int]] = []
+        face_semantic_slots: list[int] = []
         for geom in obj.get("geometry", []):
+            geom_faces: list[list[int]] = []
             _collect_face_rings(geom.get("boundaries", []), geom.get("type"),
-                                faces_global_idx)
+                                geom_faces)
+            sem = geom.get("semantics") or {}
+            sem_values = sem.get("values") or []
+            sem_surfaces = sem.get("surfaces") or []
+            for i, face in enumerate(geom_faces):
+                slot = -1
+                if i < len(sem_values):
+                    v = sem_values[i]
+                    if isinstance(v, int) and 0 <= v < len(sem_surfaces):
+                        sem_type = sem_surfaces[v].get("type")
+                        slot = TYPE_TO_SLOT.get(sem_type, -1)
+                faces_global_idx.append(face)
+                face_semantic_slots.append(slot)
         if not faces_global_idx:
             continue
 
@@ -290,7 +371,8 @@ def _manual_cityjson_import(
         local_idx_for_global: dict[int, int] = {}
         local_verts: list[tuple[float, float, float]] = []
         local_faces: list[list[int]] = []
-        for face in faces_global_idx:
+        kept_slots: list[int] = []
+        for face, slot in zip(faces_global_idx, face_semantic_slots):
             new_face = []
             for gi in face:
                 if gi not in local_idx_for_global:
@@ -304,10 +386,20 @@ def _manual_cityjson_import(
                 new_face.append(local_idx_for_global[gi])
             if len(new_face) >= 3:
                 local_faces.append(new_face)
+                kept_slots.append(slot)
 
         mesh = bpy.data.meshes.new(f"CityJSON_{obj_id}")
         mesh.from_pydata(local_verts, [], local_faces)
         mesh.update()
+        # Attach semantic slot per face when any are known. Tries the Blender 2.8+
+        # attributes API; silently no-ops on fake/mock meshes that lack it.
+        if any(s >= 0 for s in kept_slots) and hasattr(mesh, "attributes"):
+            try:
+                attr = mesh.attributes.new("semantic_surface", "INT", "FACE")
+                for i, slot in enumerate(kept_slots):
+                    attr.data[i].value = int(slot)
+            except Exception:
+                pass
         mesh_obj = bpy.data.objects.new(f"CityJSON_{obj_id}", mesh)
         coll.objects.link(mesh_obj)
         result.append(mesh_obj)

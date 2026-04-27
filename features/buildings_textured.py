@@ -36,12 +36,35 @@ def apply(context):
         obj.data.materials.append(roof_mat)
         obj.data.materials.append(wall_mat)
         obj.data.materials.append(ground_mat)
-        # Assign per-face material index based on Z-normal.
-        # TODO: Prefer semantic-tag info from CityJSON parser if available
-        # (RoofSurface / WallSurface / GroundSurface) instead of Z-normal heuristic.
+        # Prefer semantic surface info from the CityJSON parser when present
+        # (face attribute "semantic_surface" — int slot 0/1/2 from
+        # citygml_import.TYPE_TO_SLOT, or -1 = unknown). Fall back to Z-normal
+        # heuristic per-face when the attribute is missing or carries -1.
         mesh = obj.data
         mesh.calc_loop_triangles()  # ensure normals are up to date
-        for poly in mesh.polygons:
+        sem_attr = None
+        attrs = getattr(mesh, "attributes", None)
+        # Guard against MagicMock attributes in tests: only accept a real
+        # Blender attributes collection (has __contains__) and only use it when
+        # the attribute is actually present.
+        if attrs is not None and hasattr(attrs, "__contains__"):
+            try:
+                if "semantic_surface" in attrs:
+                    sem_attr = attrs.get("semantic_surface")
+            except Exception:
+                sem_attr = None
+        for i, poly in enumerate(mesh.polygons):
+            slot = -1
+            if sem_attr is not None:
+                try:
+                    raw = sem_attr.data[i].value
+                    if isinstance(raw, int):
+                        slot = raw
+                except Exception:
+                    slot = -1
+            if slot in (0, 1, 2):
+                poly.material_index = slot
+                continue
             nz = poly.normal.z
             if nz > 0.7:
                 poly.material_index = 0  # roof

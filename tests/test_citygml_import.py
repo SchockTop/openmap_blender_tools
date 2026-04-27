@@ -492,6 +492,209 @@ def test_manual_cityjson_import_creates_faces(tmp_path, monkeypatch):
     assert len(mesh.faces) == 4, mesh.faces
 
 
+SEMANTIC_LOD2_SAMPLE = textwrap.dedent("""\
+<?xml version="1.0" encoding="UTF-8"?>
+<core:CityModel xmlns:core="http://www.opengis.net/citygml/2.0"
+                xmlns:bldg="http://www.opengis.net/citygml/building/2.0"
+                xmlns:gml="http://www.opengis.net/gml">
+  <core:cityObjectMember>
+    <bldg:Building gml:id="B1">
+      <bldg:boundedBy>
+        <bldg:RoofSurface>
+          <bldg:lod2MultiSurface>
+            <gml:MultiSurface>
+              <gml:surfaceMember>
+                <gml:Polygon>
+                  <gml:exterior><gml:LinearRing>
+                    <gml:posList srsDimension="3">
+                      0 0 10 1 0 10 1 1 10 0 1 10 0 0 10
+                    </gml:posList>
+                  </gml:LinearRing></gml:exterior>
+                </gml:Polygon>
+              </gml:surfaceMember>
+            </gml:MultiSurface>
+          </bldg:lod2MultiSurface>
+        </bldg:RoofSurface>
+      </bldg:boundedBy>
+      <bldg:boundedBy>
+        <bldg:WallSurface>
+          <bldg:lod2MultiSurface>
+            <gml:MultiSurface>
+              <gml:surfaceMember>
+                <gml:Polygon>
+                  <gml:exterior><gml:LinearRing>
+                    <gml:posList srsDimension="3">
+                      0 0 0 1 0 0 1 0 10 0 0 10 0 0 0
+                    </gml:posList>
+                  </gml:LinearRing></gml:exterior>
+                </gml:Polygon>
+              </gml:surfaceMember>
+            </gml:MultiSurface>
+          </bldg:lod2MultiSurface>
+        </bldg:WallSurface>
+      </bldg:boundedBy>
+      <bldg:boundedBy>
+        <bldg:GroundSurface>
+          <bldg:lod2MultiSurface>
+            <gml:MultiSurface>
+              <gml:surfaceMember>
+                <gml:Polygon>
+                  <gml:exterior><gml:LinearRing>
+                    <gml:posList srsDimension="3">
+                      0 0 0 1 0 0 1 1 0 0 1 0 0 0 0
+                    </gml:posList>
+                  </gml:LinearRing></gml:exterior>
+                </gml:Polygon>
+              </gml:surfaceMember>
+            </gml:MultiSurface>
+          </bldg:lod2MultiSurface>
+        </bldg:GroundSurface>
+      </bldg:boundedBy>
+    </bldg:Building>
+  </core:cityObjectMember>
+</core:CityModel>
+""")
+
+
+def test_gml_to_cityjson_pure_preserves_semantic_surfaces(tmp_path):
+    """When CityGML has bldg:WallSurface/RoofSurface tags, CityJSON output must include semantics."""
+    from blender_tools.citygml_import import gml_to_cityjson_pure
+    src = tmp_path / "semantic.gml"
+    src.write_text(SEMANTIC_LOD2_SAMPLE, encoding="utf-8")
+    out = tmp_path / "semantic.json"
+    gml_to_cityjson_pure([src], out)
+    cj = json.loads(out.read_text(encoding="utf-8"))
+    bldg = cj["CityObjects"]["B1"]
+    geom = bldg["geometry"][0]
+    assert geom["type"] == "MultiSurface"
+    assert "semantics" in geom
+    surfaces = geom["semantics"]["surfaces"]
+    types = {s["type"] for s in surfaces}
+    assert "WallSurface" in types
+    assert "RoofSurface" in types
+    assert "GroundSurface" in types
+    sem_values = geom["semantics"]["values"]
+    boundaries = geom["boundaries"]
+    assert len(sem_values) == len(boundaries)
+    type_for_value = [surfaces[v]["type"] for v in sem_values]
+    assert "RoofSurface" in type_for_value
+    assert "WallSurface" in type_for_value
+    assert "GroundSurface" in type_for_value
+
+
+def test_gml_to_cityjson_pure_real_ldbv_semantics():
+    """Real LDBV data should expose semantics if the file uses bounded-by surfaces."""
+    from blender_tools.citygml_import import gml_to_cityjson_pure
+    src = Path(r"G:\Privat\Projekte\Work\OpenMap_Workflow\data\raw\lod2\690_5334.gml")
+    if not src.exists():
+        pytest.skip("LDBV LoD2 file not downloaded")
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "ldbv_semantic.json"
+        gml_to_cityjson_pure([src], out)
+        cj = json.loads(out.read_text(encoding="utf-8"))
+    sem_types_seen: set[str] = set()
+    for obj in cj["CityObjects"].values():
+        for geom in obj.get("geometry", []):
+            for s in geom.get("semantics", {}).get("surfaces", []):
+                t = s.get("type")
+                if t:
+                    sem_types_seen.add(t)
+    if not sem_types_seen:
+        pytest.skip("LDBV file uses non-semantic lod2Solid form")
+    assert sem_types_seen & {"RoofSurface", "WallSurface", "GroundSurface"}, sem_types_seen
+
+
+def test_manual_cityjson_import_reads_semantics(tmp_path):
+    """Manual importer must capture per-face semantic slots when present."""
+    from blender_tools.citygml_import import _manual_cityjson_import
+    cj = {
+        "type": "CityJSON", "version": "1.1",
+        "CityObjects": {
+            "B1": {"type": "Building", "geometry": [{
+                "type": "MultiSurface", "lod": "2",
+                "boundaries": [
+                    [[0, 1, 2]],   # roof
+                    [[0, 1, 3]],   # wall
+                    [[1, 2, 3]],   # ground
+                ],
+                "semantics": {
+                    "surfaces": [
+                        {"type": "RoofSurface"},
+                        {"type": "WallSurface"},
+                        {"type": "GroundSurface"},
+                    ],
+                    "values": [0, 1, 2],
+                },
+            }]},
+        },
+        "vertices": [[0,0,0],[1,0,0],[0,1,0],[0,0,1]],
+    }
+    src = tmp_path / "sem.json"
+    src.write_text(json.dumps(cj), encoding="utf-8")
+
+    # Track attribute creation calls.
+    created_attrs = []
+
+    class FakeAttrData:
+        def __init__(self, n): self._values = [0] * n
+        def __getitem__(self, i):
+            class _V:
+                def __init__(self, store, idx):
+                    self._s = store; self._i = idx
+                @property
+                def value(self): return self._s[self._i]
+                @value.setter
+                def value(self, v): self._s[self._i] = v
+            return _V(self._values, i)
+
+    class FakeAttr:
+        def __init__(self, n): self.data = FakeAttrData(n)
+
+    class FakeAttrs:
+        def __init__(self): self._attrs = {}
+        def get(self, name): return self._attrs.get(name)
+        def new(self, name, dtype, domain):
+            a = FakeAttr(3)
+            self._attrs[name] = a
+            created_attrs.append((name, dtype, domain, a))
+            return a
+
+    class FakeMesh:
+        def __init__(self, name):
+            self.name = name; self.verts = []; self.faces = []
+            self.attributes = FakeAttrs()
+        def from_pydata(self, verts, edges, faces):
+            self.verts = verts; self.faces = faces
+        def update(self): pass
+
+    class FakeObj:
+        def __init__(self, name, mesh): self.name = name; self.data = mesh; self.type = "MESH"
+
+    class FakeData:
+        def __init__(self): self.meshes = self; self.objects = self
+        def new(self, name, mesh=None):
+            return FakeMesh(name) if mesh is None else FakeObj(name, mesh)
+
+    class FakeColl:
+        def __init__(self): self.objects = self
+        def link(self, obj): pass
+
+    class FakeBpy:
+        def __init__(self): self.data = FakeData()
+
+    objs = _manual_cityjson_import(FakeBpy(), src, (0, 0, 0), FakeColl(), None)
+    assert len(objs) == 1
+    assert created_attrs, "expected an INT FACE attribute to be created"
+    name, dtype, domain, attr = created_attrs[0]
+    assert name == "semantic_surface"
+    assert dtype == "INT"
+    assert domain == "FACE"
+    # Slots: Roof=0, Wall=1, Ground=2 per TYPE_TO_SLOT.
+    slots = [attr.data[i].value for i in range(3)]
+    assert slots == [0, 1, 2]
+
+
 def test_gml_to_cityjson_pure_real_ldbv(tmp_path):
     from blender_tools.citygml_import import gml_to_cityjson_pure
     src = Path("../OpenMap_Workflow/data/raw/lod2/690_5334.gml")
