@@ -18,21 +18,21 @@ SKY_PRESETS: dict[str, dict[str, Any]] = {
         "label": "Midday — direct overhead sun, cool white light",
         "sun_pitch_deg": 25.0,         # nearly overhead
         "sun_azimuth_deg": 0.0,         # from south
-        "sun_energy": 200.0,
+        "sun_energy": 100.0,
         "sun_color_rgb": (1.0, 0.97, 0.93),
-        "sky_strength": 1.5,
+        "sky_strength": 1.0,
         "sky_air_density": 1.0,
-        "exposure_offset": 1.5,
+        "exposure_offset": 0.5,         # daylight needs minimal compensation
     },
     "golden-hour": {
         "label": "Golden hour (1h before sunset) — warm low sun + long shadows",
         "sun_pitch_deg": 75.0,          # very low (close to horizon)
         "sun_azimuth_deg": 75.0,        # west-southwest
-        "sun_energy": 80.0,
+        "sun_energy": 50.0,
         "sun_color_rgb": (1.0, 0.78, 0.55),  # warm orange
-        "sky_strength": 1.8,
+        "sky_strength": 1.2,
         "sky_air_density": 2.5,         # extra atmospheric scattering
-        "exposure_offset": 2.0,
+        "exposure_offset": 1.0,
     },
     "blue-hour": {
         "label": "Blue hour (post-sunset twilight) — cool ambient, no direct sun",
@@ -40,39 +40,39 @@ SKY_PRESETS: dict[str, dict[str, Any]] = {
         "sun_azimuth_deg": 75.0,
         "sun_energy": 5.0,              # faint (sun below horizon)
         "sun_color_rgb": (0.5, 0.6, 0.95),
-        "sky_strength": 1.0,
+        "sky_strength": 0.8,
         "sky_air_density": 3.5,
-        "exposure_offset": 2.5,         # boost exposure for visibility
+        "exposure_offset": 1.5,         # boost exposure for visibility
     },
     "dawn": {
         "label": "Dawn (just after sunrise) — soft low east sun, pinkish",
         "sun_pitch_deg": 80.0,
         "sun_azimuth_deg": -75.0,        # east
-        "sun_energy": 60.0,
+        "sun_energy": 40.0,
         "sun_color_rgb": (1.0, 0.85, 0.78),
-        "sky_strength": 1.4,
+        "sky_strength": 1.0,
         "sky_air_density": 2.2,
-        "exposure_offset": 2.0,
+        "exposure_offset": 1.0,
     },
     "overcast": {
         "label": "Overcast — flat diffuse light, no shadows",
         "sun_pitch_deg": 45.0,
         "sun_azimuth_deg": 30.0,
-        "sun_energy": 30.0,             # low — overcast filters direct light
+        "sun_energy": 20.0,             # low — overcast filters direct light
         "sun_color_rgb": (0.92, 0.94, 1.0),
-        "sky_strength": 3.0,            # bright sky = main light source
+        "sky_strength": 2.0,            # bright sky = main light source
         "sky_air_density": 4.0,
-        "exposure_offset": 1.5,
+        "exposure_offset": 0.5,
     },
     "afternoon": {
         "label": "Afternoon — sun 60° from vertical, southwesterly (default cinematic)",
         "sun_pitch_deg": 60.0,
         "sun_azimuth_deg": 30.0,
-        "sun_energy": 150.0,
+        "sun_energy": 80.0,
         "sun_color_rgb": (1.0, 0.95, 0.88),
-        "sky_strength": 1.5,
+        "sky_strength": 1.0,
         "sky_air_density": 1.5,
-        "exposure_offset": 1.5,
+        "exposure_offset": 0.8,
     },
 }
 
