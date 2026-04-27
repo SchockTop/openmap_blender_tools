@@ -14,11 +14,17 @@ echo "Using Python: $PY"
 "$PY" --version
 
 echo
-echo "[1/2] Installing runtime deps from vendor/ (no network)..."
+echo "[1/3] Installing build backend (setuptools + wheel) from vendor/ ..."
+# Required because step 3 uses --no-build-isolation; pip needs setuptools
+# importable in the target Python to read pyproject.toml's build-system.
+"$PY" -m pip install --no-index --find-links "$HERE/vendor" setuptools wheel
+
+echo
+echo "[2/3] Installing runtime deps from vendor/ (no network)..."
 "$PY" -m pip install --no-index --find-links "$HERE/vendor" pyproj numpy trimesh certifi
 
 echo
-echo "[2/2] Installing blender_tools in editable mode (no deps, no build isolation)..."
+echo "[3/3] Installing blender_tools in editable mode (no deps, no build isolation)..."
 "$PY" -m pip install --no-deps --no-build-isolation -e "$HERE"
 
 echo
