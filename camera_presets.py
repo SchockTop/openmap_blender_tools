@@ -32,6 +32,7 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
         "banking_max_deg": 0.0,        # walking - no banking
         "noise_amplitude_deg": 0.5,    # subtle handheld feel
         "shutter_open": 0.5,           # 180-degree shutter (filmic motion blur)
+        "tilt_pitch_deg": -5.0,        # slight uplook so horizon shows at top
         "use_case": "Walking through fields/bushes; GoPro chest-mount equivalent",
     },
     "fpv-bike": {
@@ -43,6 +44,7 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
         "banking_max_deg": 3.0,
         "noise_amplitude_deg": 0.3,
         "shutter_open": 0.5,
+        "tilt_pitch_deg": 0.0,         # level forward
         "use_case": "Bike-mount FPV; wider lens for speed feel",
     },
     "low-drone": {
@@ -54,6 +56,7 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
         "banking_max_deg": 5.0,
         "noise_amplitude_deg": 0.05,
         "shutter_open": 0.5,
+        "tilt_pitch_deg": -10.0,       # slight downlook over building
         "use_case": "Building facade reveal; Mavic-class flight",
     },
     "mid-drone": {
@@ -65,6 +68,7 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
         "banking_max_deg": 8.0,
         "noise_amplitude_deg": 0.05,
         "shutter_open": 0.5,
+        "tilt_pitch_deg": -15.0,       # moderate downlook for survey angle
         "use_case": "Corporate establishing; Inspire-class survey",
     },
     "cinematic-establishing": {
@@ -76,6 +80,7 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
         "banking_max_deg": 6.0,
         "noise_amplitude_deg": 0.05,
         "shutter_open": 0.5,
+        "tilt_pitch_deg": -20.0,       # classic establishing tilt
         "use_case": "Feature-film opener - current default",
     },
     "aircraft-approach": {
@@ -87,6 +92,7 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
         "banking_max_deg": 4.0,
         "noise_amplitude_deg": 0.02,
         "shutter_open": 0.5,
+        "tilt_pitch_deg": -45.0,       # steep down for high-altitude reveal
         "use_case": "Telephoto reveal - atmospheric compression",
     },
 }
@@ -174,6 +180,19 @@ def apply_camera_preset(camera_obj: Any,
             scene.render.motion_blur_shutter = p["shutter_open"]
         except AttributeError:
             pass
+
+    # Apply preset tilt to the camera's pitch.
+    # Blender camera default rotation looks down -Z; rotation_euler.x = 90 deg
+    # makes it look forward toward +Y (horizon level). Adding tilt_pitch_deg
+    # gives uplook (negative tilt -> looking up at the sky).
+    # NOTE: if the camera has a Damped Track / Track To constraint pointed at
+    # a target object, the constraint will override this rotation at evaluate
+    # time. To honor preset tilt in that case, remove the tracking constraint
+    # before calling apply_camera_preset (we deliberately do NOT auto-remove it
+    # here so existing scenes that rely on tracking aren't silently broken).
+    import math as _math
+    tilt = float(p.get("tilt_pitch_deg", -15.0))
+    camera_obj.rotation_euler = (_math.radians(90.0 + tilt), 0.0, 0.0)
 
     # Subtle Noise F-curve modifier on rotation (motion-sickness rules section 5.5).
     _add_noise_modifier(rig, amplitude_deg=p["noise_amplitude_deg"])

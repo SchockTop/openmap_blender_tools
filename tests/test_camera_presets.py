@@ -15,10 +15,27 @@ def test_each_preset_has_required_fields():
     from blender_tools.camera_presets import CAMERA_PRESETS
     required = {"label", "altitude_agl_m", "speed_mps", "lens_mm",
                 "sensor_width_mm", "banking_max_deg", "noise_amplitude_deg",
-                "shutter_open", "use_case"}
+                "shutter_open", "tilt_pitch_deg", "use_case"}
     for name, p in CAMERA_PRESETS.items():
         missing = required - set(p)
         assert not missing, f"preset {name!r} missing {missing}"
+
+
+def test_each_preset_has_tilt_pitch_deg():
+    """Every preset must define a tilt_pitch_deg so the camera looks at a
+    deliberate angle (negative = uplook, positive = downlook from horizon)."""
+    from blender_tools.camera_presets import CAMERA_PRESETS
+    expected = {
+        "fpv-walk": -5.0,
+        "fpv-bike": 0.0,
+        "low-drone": -10.0,
+        "mid-drone": -15.0,
+        "cinematic-establishing": -20.0,
+        "aircraft-approach": -45.0,
+    }
+    for name, want in expected.items():
+        got = CAMERA_PRESETS[name].get("tilt_pitch_deg")
+        assert got == want, f"preset {name!r}: tilt_pitch_deg={got!r}, want {want!r}"
 
 
 def test_get_preset_unknown_raises():
@@ -58,6 +75,10 @@ def test_apply_camera_preset_sets_lens_sensor_clip(preset_name):
         assert cam.data.clip_start == 0.1
     else:
         assert cam.data.clip_start == 1.0
+    # rotation_euler must have been set to (90 + tilt) degrees on X.
+    import math
+    expected_x = math.radians(90.0 + p["tilt_pitch_deg"])
+    assert cam.rotation_euler == (expected_x, 0.0, 0.0)
 
 
 def test_apply_camera_preset_lifts_rig_altitude():
