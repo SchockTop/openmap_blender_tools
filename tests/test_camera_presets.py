@@ -30,7 +30,7 @@ def test_each_preset_has_tilt_pitch_deg():
         "fpv-bike": 0.0,
         "low-drone": -10.0,
         "mid-drone": -15.0,
-        "cinematic-establishing": -20.0,
+        "cinematic-establishing": -45.0,
         "aircraft-approach": -45.0,
     }
     for name, want in expected.items():
@@ -47,8 +47,9 @@ def test_get_preset_unknown_raises():
 def test_get_preset_returns_dict():
     from blender_tools.camera_presets import get_preset
     p = get_preset("cinematic-establishing")
-    assert p["lens_mm"] == 85.0
-    assert p["altitude_agl_m"] == 2000.0
+    assert p["lens_mm"] == 50.0
+    assert p["altitude_agl_m"] == 800.0
+    assert p["tilt_pitch_deg"] == -45.0
 
 
 def test_default_preset_constant():
@@ -170,6 +171,22 @@ def test_apply_camera_preset_lifts_curve_via_helper(monkeypatch):
                                         curve_obj=curve, terrain_z=520.0)
     assert called_with["curve"] is curve
     assert called_with["z"] == 600.0  # terrain_z 520 + low-drone altitude 80
+
+
+def test_apply_camera_preset_removes_damped_track_so_tilt_applies(monkeypatch):
+    """If a Damped Track constraint exists, it must be removed so rotation
+    set by the preset isn't overridden."""
+    from blender_tools import camera_presets
+    from unittest.mock import MagicMock
+    cam = MagicMock(); cam.type = "CAMERA"; cam.data = MagicMock()
+    cam.parent = None; cam.animation_data = None
+    # Simulate a damped track constraint.
+    constraint = MagicMock(); constraint.type = "DAMPED_TRACK"
+    constraints_mock = MagicMock()
+    constraints_mock.__iter__ = lambda self: iter([constraint])
+    cam.constraints = constraints_mock
+    camera_presets.apply_camera_preset(cam, "cinematic-establishing", terrain_z=520.0)
+    constraints_mock.remove.assert_called_once_with(constraint)
 
 
 def test_preset_altitudes_are_monotonically_distinct():

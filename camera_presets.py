@@ -72,15 +72,15 @@ CAMERA_PRESETS: dict[str, dict[str, Any]] = {
         "use_case": "Corporate establishing; Inspire-class survey",
     },
     "cinematic-establishing": {
-        "label": "Cinematic establishing (2000 m AGL, 70 m/s, 85 mm)",
-        "altitude_agl_m": 2000.0,
-        "speed_mps": 70.0,
-        "lens_mm": 85.0,
+        "label": "Cinematic establishing (800 m AGL, 35 m/s, 50 mm)",
+        "altitude_agl_m": 800.0,       # was 2000 - too high for 4x2 km region
+        "speed_mps": 35.0,             # scale down speed proportionally
+        "lens_mm": 50.0,               # was 85 - wider FOV captures more terrain
         "sensor_width_mm": 36.0,
         "banking_max_deg": 6.0,
         "noise_amplitude_deg": 0.05,
         "shutter_open": 0.5,
-        "tilt_pitch_deg": -20.0,       # classic establishing tilt
+        "tilt_pitch_deg": -45.0,       # was -20 - aim camera down at city
         "use_case": "Feature-film opener - current default",
     },
     "aircraft-approach": {
@@ -192,6 +192,10 @@ def apply_camera_preset(camera_obj: Any,
     # here so existing scenes that rely on tracking aren't silently broken).
     import math as _math
     tilt = float(p.get("tilt_pitch_deg", -15.0))
+    # Remove any tracking constraints that would override our rotation.
+    for c in list(camera_obj.constraints):
+        if c.type in {"DAMPED_TRACK", "TRACK_TO", "LOCKED_TRACK"}:
+            camera_obj.constraints.remove(c)
     camera_obj.rotation_euler = (_math.radians(90.0 + tilt), 0.0, 0.0)
 
     # Subtle Noise F-curve modifier on rotation (motion-sickness rules section 5.5).
