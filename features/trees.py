@@ -131,7 +131,12 @@ def _create_tree(bpy, name, height, leaf_rgb):
         mat.use_nodes = True
         bsdf = mat.node_tree.nodes.get("Principled BSDF")
         if bsdf:
-            bsdf.inputs["Base Color"].default_value = (*leaf_rgb, 1.0)
+            boosted_rgb = (
+                leaf_rgb[0],
+                min(1.0, leaf_rgb[1] * 1.3),  # punch up green for distance legibility
+                leaf_rgb[2],
+            )
+            bsdf.inputs["Base Color"].default_value = (*boosted_rgb, 1.0)
             bsdf.inputs["Roughness"].default_value = 0.9
         tree.data.materials.clear()
         tree.data.materials.append(mat)
@@ -159,7 +164,7 @@ def _create_tree(bpy, name, height, leaf_rgb):
     # --- FOLIAGE: icosphere with Voronoi displace for organic outline ---
     bpy.ops.mesh.primitive_ico_sphere_add(
         subdivisions=2,
-        radius=height * 0.35,
+        radius=height * 0.5,
         location=(0, 0, height * 0.65),
     )
     foliage = bpy.context.active_object
@@ -192,7 +197,12 @@ def _create_tree(bpy, name, height, leaf_rgb):
     foliage_mat.use_nodes = True
     bsdf = foliage_mat.node_tree.nodes.get("Principled BSDF")
     if bsdf:
-        bsdf.inputs["Base Color"].default_value = (*leaf_rgb, 1.0)
+        boosted_rgb = (
+            leaf_rgb[0],
+            min(1.0, leaf_rgb[1] * 1.3),  # punch up green for distance legibility
+            leaf_rgb[2],
+        )
+        bsdf.inputs["Base Color"].default_value = (*boosted_rgb, 1.0)
         bsdf.inputs["Roughness"].default_value = 0.9
     foliage.data.materials.append(foliage_mat)
 
