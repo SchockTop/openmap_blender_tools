@@ -126,33 +126,84 @@ def _create_tree(bpy, name, height, leaf_rgb):
             scale = height / cur_z
             tree.scale = (scale, scale, scale)
             bpy.ops.object.transform_apply(scale=True)
+        # Sapling succeeded — apply a simple leaf-color material so trees aren't grey.
+        mat = bpy.data.materials.new(f"TreeLeaf_{name}")
+        mat.use_nodes = True
+        bsdf = mat.node_tree.nodes.get("Principled BSDF")
+        if bsdf:
+            bsdf.inputs["Base Color"].default_value = (*leaf_rgb, 1.0)
+            bsdf.inputs["Roughness"].default_value = 0.9
+        tree.data.materials.clear()
+        tree.data.materials.append(mat)
+        return tree
     except Exception as e:
         print(f"[trees] Sapling failed for {name}: {e}; using cone+sphere placeholder")
-        # Trunk: low cone.
-        bpy.ops.mesh.primitive_cone_add(radius1=0.3, radius2=0.2,
-                                        depth=height * 0.4,
-                                        location=(0, 0, height * 0.2))
-        trunk = bpy.context.active_object
-        # Foliage: sphere on top.
-        bpy.ops.mesh.primitive_uv_sphere_add(radius=height * 0.35,
-                                             location=(0, 0, height * 0.65))
-        foliage = bpy.context.active_object
-        # Join trunk + foliage.
-        trunk.select_set(True); foliage.select_set(True)
-        bpy.context.view_layer.objects.active = trunk
-        bpy.ops.object.join()
-        tree = bpy.context.active_object
-        tree.name = f"TreeTpl_{name}"
 
-    # Apply a simple leaf-color material so trees aren't grey.
-    mat = bpy.data.materials.new(f"TreeLeaf_{name}")
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes.get("Principled BSDF")
+    # --- TRUNK: 8-sided cone, brown PBR ---
+    bpy.ops.mesh.primitive_cone_add(
+        vertices=8,
+        radius1=0.3, radius2=0.15,
+        depth=height * 0.4,
+        location=(0, 0, height * 0.2),
+    )
+    trunk = bpy.context.active_object
+    trunk.name = "TempTrunk"
+    trunk_mat = bpy.data.materials.new(f"TreeBark_{name}")
+    trunk_mat.use_nodes = True
+    bsdf = trunk_mat.node_tree.nodes.get("Principled BSDF")
+    if bsdf:
+        bsdf.inputs["Base Color"].default_value = (0.25, 0.18, 0.12, 1.0)
+        bsdf.inputs["Roughness"].default_value = 0.95
+    trunk.data.materials.append(trunk_mat)
+
+    # --- FOLIAGE: icosphere with Voronoi displace for organic outline ---
+    bpy.ops.mesh.primitive_ico_sphere_add(
+        subdivisions=2,
+        radius=height * 0.35,
+        location=(0, 0, height * 0.65),
+    )
+    foliage = bpy.context.active_object
+    foliage.name = "TempFoliage"
+    tex = bpy.data.textures.new(f"TreeFoliage_{name}_disp", type="VORONOI")
+    try:
+        tex.noise_scale = 0.4
+    except Exception:
+        pass
+    disp = foliage.modifiers.new("Disp", "DISPLACE")
+    disp.texture = tex
+    disp.strength = height * 0.05
+    # Apply the displace so it bakes into the mesh.
+    bpy.ops.object.select_all(action="DESELECT")
+    foliage.select_set(True)
+    bpy.context.view_layer.objects.active = foliage
+    try:
+        bpy.ops.object.modifier_apply(modifier="Disp")
+    except Exception as ee:
+        print(f"[trees] modifier_apply failed for {name}: {ee}")
+    # Slight per-axis jitter so trees aren't perfectly symmetric.
+    jitter_y = 0.9 + (hash(name) % 30) / 100.0
+    jitter_z = 1.0 + (hash(name) % 20) / 100.0
+    foliage.scale = (1.0, jitter_y, jitter_z)
+    try:
+        bpy.ops.object.transform_apply(scale=True)
+    except Exception:
+        pass
+    foliage_mat = bpy.data.materials.new(f"TreeLeaf_{name}")
+    foliage_mat.use_nodes = True
+    bsdf = foliage_mat.node_tree.nodes.get("Principled BSDF")
     if bsdf:
         bsdf.inputs["Base Color"].default_value = (*leaf_rgb, 1.0)
         bsdf.inputs["Roughness"].default_value = 0.9
-    tree.data.materials.clear()
-    tree.data.materials.append(mat)
+    foliage.data.materials.append(foliage_mat)
+
+    # --- JOIN trunk + foliage (trunk first so its material slot 0 = bark) ---
+    bpy.ops.object.select_all(action="DESELECT")
+    trunk.select_set(True)
+    foliage.select_set(True)
+    bpy.context.view_layer.objects.active = trunk
+    bpy.ops.object.join()
+    tree = bpy.context.active_object
+    tree.name = f"TreeTpl_{name}"
     return tree
 
 
