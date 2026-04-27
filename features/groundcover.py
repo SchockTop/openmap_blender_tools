@@ -16,7 +16,42 @@ NAME = "groundcover"
 DESCRIPTION = "Dense grass+bush scatter in a band around the camera path (FPV-altitude only)"
 
 VICINITY_METERS = 200.0
-BASE_DENSITY = 5.0  # instances per square meter inside the vicinity band
+DEFAULT_TARGET_INSTANCES = 50_000  # target max instance count regardless of region size
+DEFAULT_VICINITY_BAND = 200.0       # meters either side of the path
+
+
+def _curve_arc_length(curve_obj) -> float:
+    pts = []
+    for spline in curve_obj.data.splines:
+        for bp in (list(spline.bezier_points) + list(spline.points)):
+            pts.append((bp.co.x, bp.co.y, bp.co.z))
+    if len(pts) < 2:
+        return 0.0
+    total = 0.0
+    for i in range(1, len(pts)):
+        dx = pts[i][0] - pts[i-1][0]
+        dy = pts[i][1] - pts[i-1][1]
+        dz = pts[i][2] - pts[i-1][2]
+        total += (dx*dx + dy*dy + dz*dz) ** 0.5
+    return total
+
+
+def _density_for_target(curve_obj, target_count: int = DEFAULT_TARGET_INSTANCES,
+                        vicinity_m: float = DEFAULT_VICINITY_BAND) -> float:
+    """Compute per-m² density that yields ~target_count total instances given
+    the curve's arc length and the vicinity band width.
+
+    Density = target / (arc_length × 2 × vicinity_m)
+
+    Returns instances per m². Caps at 5.0 (sanity) and floors at 0.001
+    (so big regions still get a few instances).
+    """
+    arc = _curve_arc_length(curve_obj)
+    if arc <= 0:
+        return 1.0
+    band_area_m2 = arc * 2.0 * vicinity_m
+    density = target_count / band_area_m2
+    return max(0.001, min(5.0, density))
 
 
 def apply(context):
@@ -39,12 +74,22 @@ def apply(context):
     if curve is None:
         curve = _make_fallback_curve(bpy)
 
+    # Auto-scale density unless overridden.
+    args_ns = context.get("args")
+    target = (getattr(args_ns, "groundcover_target_instances", None)
+              if args_ns else None) or DEFAULT_TARGET_INSTANCES
+    density = _density_for_target(curve, target_count=target)
+    print(f"[groundcover] auto density {density:.4f} instances/m² "
+          f"(curve arc {_curve_arc_length(curve):.0f} m, target {target} instances)")
+
     template_collection = _ensure_groundcover_templates(bpy)
-    mod = _attach_or_replace_groundcover_gn(bpy, terrain, template_collection, curve)
+    mod = _attach_or_replace_groundcover_gn(bpy, terrain, template_collection,
+                                             curve, density=density)
     print(f"[groundcover] scatter attached: vicinity {VICINITY_METERS}m around '{curve.name}'")
     return {"groundcover_modifier_name": mod.name,
             "groundcover_template_count": len(template_collection.objects),
-            "groundcover_curve_name": curve.name}
+            "groundcover_curve_name": curve.name,
+            "groundcover_density": density}
 
 
 def _make_fallback_curve(bpy):
@@ -133,7 +178,7 @@ def _make_green_material(bpy, name, rgb):
     return mat
 
 
-def _attach_or_replace_groundcover_gn(bpy, terrain, template_collection, curve):
+def _attach_or_replace_groundcover_gn(bpy, terrain, template_collection, curve, density=5.0):
     mod_name = "GroundcoverScatter"
     existing = terrain.modifiers.get(mod_name)
     if existing:
@@ -174,7 +219,7 @@ def _attach_or_replace_groundcover_gn(bpy, terrain, template_collection, curve):
     # Density node.
     n_dens = nodes.new("ShaderNodeMath"); n_dens.location = (-500, -200)
     n_dens.operation = "MULTIPLY"
-    n_dens.inputs[1].default_value = BASE_DENSITY
+    n_dens.inputs[1].default_value = density   # was BASE_DENSITY
     links.new(n_mask.outputs["Value"], n_dens.inputs[0])
 
     # Distribute Points on Faces (with density attribute).
