@@ -59,7 +59,8 @@ def apply_cinematic_preset(scene: Any,
                            render_engine: str = "BLENDER_EEVEE_NEXT",
                            samples: int | None = None,
                            resolution: tuple[int, int] = (1920, 1080),
-                           viewport_simplify_subdiv: int = 5) -> None:
+                           viewport_simplify_subdiv: int = 5,
+                           quality: str | None = None) -> None:
     """Apply cinematic-grade scene settings.
 
     Args:
@@ -68,6 +69,9 @@ def apply_cinematic_preset(scene: Any,
         samples: render samples; defaults to 64 for Eevee, 256 for Cycles.
         resolution: (x, y) pixel dimensions.
         viewport_simplify_subdiv: cap Subsurf in viewport (full subdiv at render).
+        quality: optional quality preset name ("draft" / "preview" / "final"). If
+            provided, `quality_presets.apply_quality` is called AFTER the cinematic
+            setup so quality wins over the cinematic resolution/sample defaults.
     """
     _ = _require_bpy()  # ensure we're inside Blender; bpy not used directly here
 
@@ -130,3 +134,9 @@ def apply_cinematic_preset(scene: Any,
                     node.inputs["Strength"].default_value = max(
                         float(node.inputs["Strength"].default_value), 1.5
                     )
+
+    # Quality envelope (optional) — applied LAST so it overrides resolution/samples
+    # set above. Imported lazily to avoid a hard dep when quality is not used.
+    if quality is not None:
+        from . import quality_presets
+        quality_presets.apply_quality(scene, quality)

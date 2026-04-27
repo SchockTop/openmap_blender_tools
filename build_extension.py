@@ -38,6 +38,7 @@ RUNTIME_MODULES = [
     "hidden_geo_cull.py",
     "ndvi_scatter.py",
     "operators.py",
+    "quality_presets.py",
     "sky_presets.py",
     "step_retessellate.py",
     "terrain_setup.py",
