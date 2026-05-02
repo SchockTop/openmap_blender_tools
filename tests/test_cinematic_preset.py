@@ -28,7 +28,7 @@ def test_apply_cinematic_preset_sets_exposure_compensation(monkeypatch):
     scene = MagicMock(); scene.objects = []
     scene.render.engine = "CYCLES"; scene.world = None
     cinematic_preset.apply_cinematic_preset(scene, render_engine="BLENDER_EEVEE_NEXT")
-    assert scene.view_settings.exposure == 1.5
+    assert scene.view_settings.exposure == 0.0
 
 
 def test_ensure_cinematic_sun_uses_higher_energy_default():

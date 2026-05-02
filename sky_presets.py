@@ -68,11 +68,11 @@ SKY_PRESETS: dict[str, dict[str, Any]] = {
         "label": "Afternoon — sun 60° from vertical, southwesterly (default cinematic)",
         "sun_pitch_deg": 60.0,
         "sun_azimuth_deg": 30.0,
-        "sun_energy": 80.0,
+        "sun_energy": 10.0,
         "sun_color_rgb": (1.0, 0.95, 0.88),
-        "sky_strength": 1.0,
+        "sky_strength": 0.2,
         "sky_air_density": 1.5,
-        "exposure_offset": 0.8,
+        "exposure_offset": 0.0,
     },
 }
 

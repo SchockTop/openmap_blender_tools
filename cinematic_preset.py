@@ -116,27 +116,25 @@ def apply_cinematic_preset(scene: Any,
     except Exception:
         scene.view_settings.look = ""
 
-    # Exposure compensation — AgX is conservative on highlights, so bump
-    # the scene exposure +1.5 stops for a brighter cinematic look.
-    scene.view_settings.exposure = 1.5
+    scene.view_settings.exposure = 0.0
 
-    # Dial up the world Multiple Scattering Sky strength if present.
     world = scene.world
     if world is not None and world.use_nodes and world.node_tree:
+        has_tex_sky = any(n.type == "TEX_SKY" for n in world.node_tree.nodes)
         for node in world.node_tree.nodes:
             if node.type == "TEX_SKY":
-                # Sky background: more atmospheric scattering, brighter sun disk.
                 if hasattr(node, "air_density"):
                     try:
                         node.air_density = 1.5
                     except (AttributeError, TypeError):
                         pass
-            if node.type == "BACKGROUND":
-                # Bump sky background strength (scene illumination from sky).
-                if "Strength" in node.inputs:
+            if node.type == "BACKGROUND" and "Strength" in node.inputs:
+                if has_tex_sky:
                     node.inputs["Strength"].default_value = max(
-                        float(node.inputs["Strength"].default_value), 1.5
+                        float(node.inputs["Strength"].default_value), 1.0
                     )
+                else:
+                    node.inputs["Strength"].default_value = 0.2
 
     # Quality envelope (optional) — applied LAST so it overrides resolution/samples
     # set above. Imported lazily to avoid a hard dep when quality is not used.
