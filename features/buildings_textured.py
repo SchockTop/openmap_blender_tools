@@ -18,12 +18,25 @@ def apply(context):
     bpy = context["bpy"]
     buildings = context.get("building_objs") or []
     bbox = context.get("bbox_utm32n")
+    anchor = context.get("anchor_utm32n") or (0.0, 0.0, 0.0)
     ortho_dir = context.get("ortho_dir")
     if not buildings:
         print("[buildings-textured] no buildings in context; skip")
         return {}
 
-    roof_mat = _make_roof_material(bpy, bbox, ortho_dir)
+    # Scene-local bbox: UTM bbox minus anchor. Buildings are imported in scene-local
+    # coordinates (UTM minus anchor), so the DOPProjector Empty must match.
+    if bbox:
+        scene_bbox = (
+            bbox[0] - anchor[0],
+            bbox[1] - anchor[1],
+            bbox[2] - anchor[0],
+            bbox[3] - anchor[1],
+        )
+    else:
+        scene_bbox = None
+
+    roof_mat = _make_roof_material(bpy, scene_bbox, ortho_dir)
     wall_mat = _make_wall_material(bpy)
     ground_mat = _make_transparent_material(bpy)
 
@@ -88,11 +101,19 @@ def _make_roof_material(bpy, bbox, ortho_dir):
     world-XY UV space; ground shader uses the same anchor (no edge seam).
     """
     name = "BldRoof_DOP"
+
+    # Always ensure the DOPProjector exists, even if the material is cached.
+    # The projector is shared with ground_shader; both must reference it.
+    try:
+        # Production: extension context.
+        from bl_ext.user_default.blender_tools.dop_projector import ensure_dop_projector
+    except ImportError:
+        # Tests / dev: top-level import via sys.path.
+        from dop_projector import ensure_dop_projector
+    projector = ensure_dop_projector(bpy, bbox or (0, 0, 1000, 1000))
+
     if name in bpy.data.materials:
         return bpy.data.materials[name]
-
-    from dop_projector import ensure_dop_projector
-    projector = ensure_dop_projector(bpy, bbox or (0, 0, 1000, 1000))
 
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True

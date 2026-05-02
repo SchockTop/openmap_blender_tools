@@ -17,7 +17,10 @@ def apply(context):
     bpy = context["bpy"]
     terrain = context.get("terrain_obj")
     if terrain is None:
-        print("[ground-shader] no terrain in context; skip")
+        # Fallback: search the scene for an obvious ground mesh (parity with trees.py).
+        terrain = _find_terrain_in_scene(bpy)
+    if terrain is None:
+        print("[ground-shader] no terrain in context or scene; skip")
         return {}
 
     existing_mat = terrain.data.materials[0] if (terrain.data.materials and
@@ -32,6 +35,21 @@ def apply(context):
           f"({'combined with DOP drape' if is_combine_mode else 'standalone procedural'})")
     return {"ground_shader_material": mat.name,
             "ground_shader_combined_with_drape": is_combine_mode}
+
+
+def _find_terrain_in_scene(bpy):
+    """Heuristic terrain finder: any mesh with name starting with Terrain/Ground/Plane."""
+    try:
+        scene = bpy.context.scene
+    except Exception:
+        return None
+    for obj in scene.objects:
+        if getattr(obj, "type", None) != "MESH":
+            continue
+        nm = obj.name.lower()
+        if nm.startswith(("terrain", "ground", "plane")):
+            return obj
+    return None
 
 
 def _build_procedural_ground_material(bpy, base_image_material=None):
@@ -154,7 +172,11 @@ def _build_procedural_ground_material(bpy, base_image_material=None):
         img_node = next((n for n in base_image_material.node_tree.nodes
                         if n.type == "TEX_IMAGE" and n.image is not None), None)
         if img_node is not None:
-            from dop_projector import ensure_dop_projector, PROJECTOR_NAME
+            try:
+                from bl_ext.user_default.blender_tools.dop_projector import (
+                    ensure_dop_projector, PROJECTOR_NAME)
+            except ImportError:
+                from dop_projector import ensure_dop_projector, PROJECTOR_NAME
             # Projector should already exist (created by buildings_textured or the
             # assemble flow); fall back to a unit-scale anchor if not.
             if PROJECTOR_NAME in bpy.data.objects:
