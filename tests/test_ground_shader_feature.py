@@ -101,3 +101,111 @@ def test_apply_uses_wave_not_brick_for_field_layer(monkeypatch):
     assert "ShaderNodeTexWave" in nodes_created, f"Wave node not used: {nodes_created}"
     assert "ShaderNodeTexBrick" not in nodes_created or nodes_created.count("ShaderNodeTexBrick") == 0, \
         f"field layer still uses Brick (cobblestone): {nodes_created}"
+
+
+# --- Sprint 7 plan Task 6 ---
+
+
+def _fake_bpy_with_node_tracking():
+    """Build a fake bpy that captures every node created plus the MixRGB by name."""
+    nodes_created = []
+    captured = {}
+
+    class FakeNodes:
+        def __init__(self):
+            self._items = []
+        def new(self, t):
+            n = MagicMock(); n.location = (0, 0)
+            # inputs returns per-key MagicMock with default_value writable.
+            per_key = {}
+            def _getitem(self_, k):
+                if k not in per_key:
+                    m = MagicMock(); m._key = k
+                    per_key[k] = m
+                return per_key[k]
+            n.inputs = MagicMock(); n.inputs.__getitem__ = _getitem
+            n.outputs = MagicMock(); n.outputs.__getitem__ = lambda s, k: MagicMock()
+            n.type = t.replace("ShaderNode", "")
+            self._items.append(n); nodes_created.append(t)
+            if t == "ShaderNodeMixRGB" and "drape_mix" not in captured:
+                # First MixRGB created here in the drape branch is the one we name.
+                # Code calls .name = "DropDrapeMix" after creation.
+                captured["mix_candidate"] = n
+                captured["mix_inputs"] = per_key
+            if t == "ShaderNodeTexCoord":
+                captured["coord"] = n
+            if t == "ShaderNodeTexImage":
+                captured["tex"] = n
+            return n
+        def clear(self): self._items.clear()
+        def __iter__(self): return iter(self._items)
+
+    class FakeMat:
+        def __init__(self, name):
+            self.name = name; self.use_nodes = True
+            self.node_tree = MagicMock()
+            self.node_tree.nodes = FakeNodes()
+            self.node_tree.links = MagicMock()
+
+    fake_bpy = MagicMock()
+    fake_bpy.data.materials.__contains__ = lambda self, name: False
+    fake_bpy.data.materials.new = lambda name: FakeMat(name)
+    fake_bpy.data.materials.remove = lambda m: None
+
+    # Make objects.__contains__ True for DOPProjector so ensure_dop_projector
+    # doesn't try to call bpy.context.scene.collection.objects.link.
+    fake_proj = MagicMock(); fake_proj.name = "DOPProjector"
+    fake_bpy.data.objects.__contains__ = lambda self, n: True
+    fake_bpy.data.objects.__getitem__ = lambda self, n: fake_proj
+
+    return fake_bpy, nodes_created, captured, fake_proj
+
+
+def _drape_base_material():
+    base = MagicMock()
+    base.name = "OrthoDrape_TEST"
+    img = MagicMock()
+    img_node = MagicMock()
+    img_node.type = "TEX_IMAGE"
+    img_node.image = img
+    base.node_tree.nodes = [img_node]
+    return base
+
+
+def test_drape_combine_uses_dop_projector_object_coord():
+    ground_shader = _import_feature()
+    fake_bpy, nodes_created, captured, fake_proj = _fake_bpy_with_node_tracking()
+
+    ground_shader._build_procedural_ground_material(
+        fake_bpy, base_image_material=_drape_base_material())
+
+    # When combining with drape, a TexCoord node and a TexImage node must be created.
+    assert "ShaderNodeTexCoord" in nodes_created
+    assert "ShaderNodeTexImage" in nodes_created
+    # The TexCoord's .object must be set to the DOPProjector empty.
+    assert captured["coord"].object is fake_proj
+
+
+def test_drape_mixrgb_node_named_drop_drape_mix():
+    """altitude_handler needs to find the mix node by name 'DropDrapeMix'."""
+    ground_shader = _import_feature()
+    fake_bpy, nodes_created, captured, _ = _fake_bpy_with_node_tracking()
+
+    ground_shader._build_procedural_ground_material(
+        fake_bpy, base_image_material=_drape_base_material())
+
+    # The drape MixRGB node's .name must have been assigned 'DropDrapeMix'.
+    assert "mix_candidate" in captured
+    assert captured["mix_candidate"].name == "DropDrapeMix"
+
+
+def test_no_drape_no_dopprojector_node():
+    """Without a base drape material, no Texture Coordinate-to-projector wiring."""
+    ground_shader = _import_feature()
+    fake_bpy, nodes_created, captured, _ = _fake_bpy_with_node_tracking()
+
+    ground_shader._build_procedural_ground_material(fake_bpy, base_image_material=None)
+
+    # No TexCoord/TexImage extra in the standalone branch.
+    assert "coord" not in captured
+    assert "tex" not in captured

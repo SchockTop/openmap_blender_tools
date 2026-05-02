@@ -149,17 +149,31 @@ def _build_procedural_ground_material(bpy, base_image_material=None):
 
     final_color_socket = mix_field.outputs["Color"]
 
-    # --- Optional: combine with DOP drape ---
+    # --- Optional: combine with DOP drape (uses shared DOPProjector) ---
     if base_image_material is not None:
         img_node = next((n for n in base_image_material.node_tree.nodes
                         if n.type == "TEX_IMAGE" and n.image is not None), None)
         if img_node is not None:
-            uv = nt.nodes.new("ShaderNodeUVMap"); uv.location = (-1500, 600)
+            from dop_projector import ensure_dop_projector, PROJECTOR_NAME
+            # Projector should already exist (created by buildings_textured or the
+            # assemble flow); fall back to a unit-scale anchor if not.
+            if PROJECTOR_NAME in bpy.data.objects:
+                projector = bpy.data.objects[PROJECTOR_NAME]
+            else:
+                projector = ensure_dop_projector(bpy, (0, 0, 1000, 1000))
+
+            coord = nt.nodes.new("ShaderNodeTexCoord"); coord.location = (-1500, 600)
+            coord.object = projector  # shared with roofs -> no edge seam
             tex = nt.nodes.new("ShaderNodeTexImage"); tex.location = (-1300, 600)
             tex.image = img_node.image; tex.extension = "EXTEND"
-            nt.links.new(uv.outputs["UV"], tex.inputs["Vector"])
+            tex.projection = "FLAT"  # ground is flat-ish; box not needed
+            nt.links.new(coord.outputs["Object"], tex.inputs["Vector"])
+
             mix_drape = nt.nodes.new("ShaderNodeMixRGB"); mix_drape.location = (300, -200)
+            mix_drape.name = "DropDrapeMix"  # altitude_handler looks up by this name
             mix_drape.blend_type = "MULTIPLY"
+            # Fac is overwritten at render time by altitude_handler (camera-Z curve);
+            # 0.6 is the low-altitude default.
             mix_drape.inputs["Fac"].default_value = 0.6
             nt.links.new(tex.outputs["Color"], mix_drape.inputs["Color1"])
             nt.links.new(final_color_socket, mix_drape.inputs["Color2"])
