@@ -21,20 +21,26 @@ import argparse
 import shutil
 import sys
 import tempfile
-import tomllib
 import zipfile
 from pathlib import Path
+
+try:
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # 3.10 fallback
+    import tomli as tomllib  # type: ignore
 
 HERE = Path(__file__).resolve().parent
 
 RUNTIME_MODULES = [
     "__init__.py",
+    "altitude_handler.py",
     "cli.py",
     "camera_presets.py",
     "cinematic_preset.py",
     "citygml_import.py",
     "cleanup_pymeshlab.py",
     "csv_curve_import.py",
+    "dop_projector.py",
     "geo_import.py",
     "hidden_geo_cull.py",
     "ndvi_scatter.py",
@@ -70,6 +76,13 @@ def assemble(staging: Path, manifest: dict) -> None:
     if features_src.is_dir():
         shutil.copytree(features_src, staging / "features",
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
+    # 2c. Copy assets/ (trees.blend and leaf textures) as a directory tree.
+    assets_src = HERE / "assets"
+    if assets_src.is_dir():
+        shutil.copytree(assets_src, staging / "assets",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc",
+                                                      "*.blend1"))
 
     # 3. Copy wheels declared in manifest.
     wheels_dir = staging / "wheels"
