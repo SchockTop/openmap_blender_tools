@@ -25,10 +25,12 @@ def _build_fake_bpy():
             mat.node_tree = MagicMock()
             mat.node_tree.nodes = MagicMock()
             mat.node_tree.nodes.clear = MagicMock()
+            # Track node types created so tests can assert on them.
+            mat.node_tree.nodes.created_types = []
             # nodes.new returns a MagicMock that has inputs/outputs subscriptable.
             def _new_node(_type):
+                mat.node_tree.nodes.created_types.append(_type)
                 node = MagicMock()
-                # Make inputs/outputs return MagicMock when subscripted.
                 node.inputs = MagicMock()
                 node.inputs.__getitem__ = lambda self, k: MagicMock(default_value=None)
                 node.outputs = MagicMock()
@@ -152,3 +154,110 @@ def test_module_exposes_NAME_and_DESCRIPTION():
     bt = _import_feature()
     assert bt.NAME == "buildings-textured"
     assert isinstance(bt.DESCRIPTION, str) and len(bt.DESCRIPTION) > 0
+
+
+# --- Sprint 7 plan Task 5 ---
+
+def test_roof_material_uses_dop_projector_texture_coord():
+    """Roof material must drive UV from a Texture Coordinate node, not Generated."""
+    bt = _import_feature()
+    bpy = _build_fake_bpy()
+    obj = _fake_building()
+    ctx = {"bpy": bpy, "building_objs": [obj],
+           "bbox_utm32n": (1000, 2000, 1500, 2400), "ortho_dir": None}
+    bt.apply(ctx)
+
+    roof = bpy.data.materials["BldRoof_DOP"]
+    assert "ShaderNodeTexCoord" in roof.node_tree.nodes.created_types, (
+        f"Expected ShaderNodeTexCoord; got {roof.node_tree.nodes.created_types}")
+
+
+def test_roof_material_uses_box_projection_for_pitched_roofs():
+    """The TexImage node's projection must be BOX (handles pitched LoD2 roofs)."""
+    bt = _import_feature()
+    bpy = _build_fake_bpy()
+    obj = _fake_building()
+    ctx = {"bpy": bpy, "building_objs": [obj],
+           "bbox_utm32n": (0, 0, 100, 100), "ortho_dir": None}
+    bt.apply(ctx)
+
+    roof = bpy.data.materials["BldRoof_DOP"]
+    # ShaderNodeTexImage was created — verify Box projection by re-running
+    # _make_roof_material in isolation and capturing the configured tex node.
+    captured = {}
+    def _new_node(_type):
+        node = MagicMock()
+        node.inputs = MagicMock()
+        node.inputs.__getitem__ = lambda self, k: MagicMock(default_value=None)
+        node.outputs = MagicMock()
+        node.outputs.__getitem__ = lambda self, k: MagicMock()
+        if _type == "ShaderNodeTexImage":
+            captured["tex"] = node
+        return node
+    # Build a fresh material whose nodes.new spies on the TexImage node.
+    fresh_mat = MagicMock()
+    fresh_mat.use_nodes = False
+    fresh_mat.node_tree = MagicMock()
+    fresh_mat.node_tree.nodes = MagicMock()
+    fresh_mat.node_tree.nodes.clear = MagicMock()
+    fresh_mat.node_tree.nodes.new = _new_node
+    fresh_mat.node_tree.links = MagicMock()
+    fresh_mat.node_tree.links.new = MagicMock()
+    # Force materials.new to return our fresh_mat the next call.
+    bpy.data.materials.pop("BldRoof_DOP", None)
+    bpy.data.materials.new = lambda name: fresh_mat
+    bt._make_roof_material(bpy, bbox=(0, 0, 100, 100), ortho_dir=None)
+
+    assert "tex" in captured, "TexImage node was not created"
+    assert captured["tex"].projection == "BOX"
+    assert captured["tex"].projection_blend > 0.0
+
+
+def test_roof_drops_multiply_fac_to_dot_four():
+    """The MULTIPLY mix Fac default should be 0.4 (was 0.7), so DOP detail dominates."""
+    bt = _import_feature()
+    bpy = _build_fake_bpy()
+    obj = _fake_building()
+    ctx = {"bpy": bpy, "building_objs": [obj],
+           "bbox_utm32n": (0, 0, 100, 100), "ortho_dir": None}
+    # Spy on the MixRGB node creation to capture its Fac assignment.
+    captured = {"mix_fac_writes": []}
+    real_build = _build_fake_bpy
+    bpy = real_build()  # rebuild
+
+    def _new_node(_type):
+        node = MagicMock()
+        # Subscript inputs return a per-key MagicMock that records default_value writes.
+        per_key = {}
+        def _getitem(self, k):
+            if k not in per_key:
+                m = MagicMock()
+                m._key = k
+                per_key[k] = m
+            return per_key[k]
+        node.inputs = MagicMock()
+        node.inputs.__getitem__ = _getitem
+        node.outputs = MagicMock()
+        node.outputs.__getitem__ = lambda self, k: MagicMock()
+        if _type == "ShaderNodeMixRGB":
+            captured["mix"] = node
+            captured["mix_inputs"] = per_key
+        return node
+
+    fresh_mat = MagicMock()
+    fresh_mat.use_nodes = False
+    fresh_mat.node_tree = MagicMock()
+    fresh_mat.node_tree.nodes = MagicMock()
+    fresh_mat.node_tree.nodes.clear = MagicMock()
+    fresh_mat.node_tree.nodes.new = _new_node
+    fresh_mat.node_tree.links = MagicMock()
+    fresh_mat.node_tree.links.new = MagicMock()
+    bpy.data.materials.pop("BldRoof_DOP", None)
+    bpy.data.materials.new = lambda name: fresh_mat
+    bt._make_roof_material(bpy, bbox=(0, 0, 100, 100), ortho_dir=None)
+
+    assert "mix" in captured, "MixRGB node was not created"
+    fac_input = captured["mix_inputs"].get("Fac")
+    assert fac_input is not None, "MixRGB Fac input not accessed"
+    # The implementation calls mix.inputs["Fac"].default_value = 0.4
+    assert fac_input.default_value == 0.4

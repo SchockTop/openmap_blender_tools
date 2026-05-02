@@ -78,16 +78,22 @@ def apply(context):
 
 
 def _make_roof_material(bpy, bbox, ortho_dir):
-    """Roof material — DOP-projected ortho TINTED with warm German tile palette.
+    """Roof material — DOP-projected ortho via DOPProjector Empty + Box mapping.
 
-    The München DOP is mostly grey/concrete from above, so we Mix the DOP
-    color with a saturated red-orange tile color (terra-cotta) so roofs
-    visually read as roofs at any altitude. Per-building colour variation via
-    Object Info > Random hue shift.
+    Box mapping (vs pure planar) handles pitched LoD2 roofs gracefully — a
+    top-down planar projection stretches south/north faces of pitched roofs
+    into streaks. Box mapping samples per-face by dominant normal.
+
+    Uses Texture Coordinate.Object → DOPProjector so all roofs share one
+    world-XY UV space; ground shader uses the same anchor (no edge seam).
     """
     name = "BldRoof_DOP"
     if name in bpy.data.materials:
         return bpy.data.materials[name]
+
+    from dop_projector import ensure_dop_projector
+    projector = ensure_dop_projector(bpy, bbox or (0, 0, 1000, 1000))
+
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
     nt = mat.node_tree
@@ -95,10 +101,11 @@ def _make_roof_material(bpy, bbox, ortho_dir):
     out = nt.nodes.new("ShaderNodeOutputMaterial")
     bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
     tex = nt.nodes.new("ShaderNodeTexImage")
-    mapping = nt.nodes.new("ShaderNodeMapping")
+    tex.projection = "BOX"
+    tex.projection_blend = 0.3
     coord = nt.nodes.new("ShaderNodeTexCoord")
-    nt.links.new(coord.outputs["Generated"], mapping.inputs["Vector"])
-    nt.links.new(mapping.outputs["Vector"], tex.inputs["Vector"])
+    coord.object = projector  # critical: drives world-XY sampling
+    nt.links.new(coord.outputs["Object"], tex.inputs["Vector"])
 
     # Warm tile palette (terra-cotta red-orange). Mixed with DOP for variation.
     tile_color = nt.nodes.new("ShaderNodeRGB")
@@ -124,7 +131,7 @@ def _make_roof_material(bpy, bbox, ortho_dir):
     # Mix DOP (when available) with the tile color (DOP gives variation, tile gives warm hue).
     mix = nt.nodes.new("ShaderNodeMixRGB")
     mix.blend_type = "MULTIPLY"
-    mix.inputs["Fac"].default_value = 0.7   # tile dominant; DOP just adds detail
+    mix.inputs["Fac"].default_value = 0.4   # DOP-dominant; tile color tints (was 0.7 = tile-heavy)
     nt.links.new(hsv.outputs["Color"], mix.inputs["Color1"])
     nt.links.new(tex.outputs["Color"], mix.inputs["Color2"])
 
