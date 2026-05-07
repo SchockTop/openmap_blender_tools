@@ -296,7 +296,7 @@ def cityjson_to_blender(
     try:
         bpy.ops.preferences.addon_enable(module="up3date")
     except Exception:
-        pass  # addon may not be installed; caller handles the import error
+        print("[citygml] Warning: Up3date addon not found. Using manual fallback import (limited features).")
 
     # Load anchor into scene prop for downstream consumption.
     bpy.context.scene["utm32n_anchor"] = list(anchor_utm32n)
@@ -311,8 +311,8 @@ def cityjson_to_blender(
     # Fallback: a manual JSON parse + mesh-from-verts build.
     try:
         bpy.ops.up3date.import_cityjson(filepath=str(cityjson_path))
-    except (AttributeError, RuntimeError):
-        # Manual fallback: parse and create placeholder mesh per building.
+    except (AttributeError, RuntimeError) as e:
+        print(f"[citygml] Up3date import unavailable ({e}); using manual CityJSON fallback.")
         return _manual_cityjson_import(
             bpy, cityjson_path, anchor_utm32n, coll, terrain_object_name
         )

@@ -16,8 +16,14 @@ from bpy.props import (
     FloatProperty,
 )
 
+import os
 import subprocess
 from pathlib import Path
+
+_DEFAULT_WORKFLOW_ROOT = os.environ.get(
+    "OPENMAP_WORKFLOW_ROOT",
+    str(Path(__file__).resolve().parent.parent),  # assumes addon is a submodule of workflow
+)
 
 from . import world_setup, hidden_geo_cull
 
@@ -135,7 +141,7 @@ class BLENDERTOOLS_OT_full_pipeline(bpy.types.Operator):
     workflow_root: StringProperty(
         name="OpenMap_Workflow root",
         subtype="DIR_PATH",
-        default=r"G:\Privat\Projekte\Work\OpenMap_Workflow",
+        default=_DEFAULT_WORKFLOW_ROOT,
     )
 
     def execute(self, context):

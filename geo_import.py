@@ -39,6 +39,8 @@ def _vendored_gdal_env() -> Optional[dict[str, str]]:
     """
     bin_dir = _VENDOR_ROOT / "bin"
     if not bin_dir.is_dir():
+        # Vendored GDAL only ships for Windows; other platforms need system GDAL in PATH
+        print(f"[geo_import] Vendored GDAL not found at {bin_dir}; falling back to system GDAL on PATH.")
         return None
     env = os.environ.copy()
     env["PROJ_LIB"] = str(_VENDOR_ROOT / "share" / "proj")
