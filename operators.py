@@ -105,7 +105,7 @@ class BLENDERTOOLS_OT_import_heightmap(bpy.types.Operator):
     directory: StringProperty(subtype="DIR_PATH")
     filter_glob: StringProperty(default="*.tif;*.tiff", options={"HIDDEN"})
     files: bpy.props.CollectionProperty(type=bpy.types.OperatorFileListElement)
-    subdivisions: IntProperty(name="Subdivisions", default=11, min=1, max=15)
+    subdivisions: IntProperty(name="Subdivisions", default=8, min=1, max=12)
     strength: FloatProperty(name="Displacement strength", default=1.0, min=0.01)
 
     def execute(self, context):
@@ -119,49 +119,49 @@ class BLENDERTOOLS_OT_import_heightmap(bpy.types.Operator):
                 if p.suffix.lower() in (".tif", ".tiff") and p.is_file():
                     tifs.append(p)
         if not tifs and self.filepath:
-            tifs = [Path(self.filepath)]
+            fp = Path(self.filepath)
+            if fp.is_file():
+                tifs = [fp]
+        if not tifs:
+            tifs = sorted(directory.glob("*.tif")) + sorted(directory.glob("*.tiff"))
         if not tifs:
             self.report({"ERROR"}, "No .tif files selected")
             return {"CANCELLED"}
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            heightmap_path = Path(tmpdir) / "heightmap.tif"
+        # Mosaic into a single heightmap, then read metadata via gdalinfo.
+        proc_dir = directory / "_openmap_processed"
+        proc_dir.mkdir(parents=True, exist_ok=True)
+        heightmap_path = proc_dir / "heightmap.tif"
+
+        try:
             geo_import.dgm_tif_to_heightmap(tifs, heightmap_path)
+        except Exception as e:
+            self.report({"ERROR"}, f"GDAL mosaic failed: {e}")
+            return {"CANCELLED"}
 
-            from PIL import Image
-            with Image.open(heightmap_path) as img:
-                w, h = img.size
-            tags = {}
-            try:
-                with Image.open(tifs[0]) as img0:
-                    tags = img0.tag_v2
-                    scale = tags.get(33550, (1.0, 1.0))
-                    sx = float(scale[0]) * w
-                    sy = float(scale[1]) * h
-            except Exception:
-                sx, sy = float(w), float(h)
+        try:
+            meta = geo_import.geotiff_metadata(heightmap_path)
+        except Exception as e:
+            self.report({"ERROR"}, f"Cannot read heightmap metadata: {e}")
+            return {"CANCELLED"}
 
-            size = (sx, sy)
-            anchor = _get_scene_anchor(context)
-            try:
-                from .terrain_setup import _read_anchor_from_tif
-                tiepoint = tags.get(33922)
-                if tiepoint:
-                    anchor = (float(tiepoint[3]), float(tiepoint[4]), 0.0)
-                    context.scene["utm32n_anchor"] = list(anchor)
-            except Exception:
-                pass
+        size = (meta["size_meters_x"], meta["size_meters_y"])
+        anchor = (meta["origin_x"], meta["origin_y"] - meta["size_meters_y"], 0.0)
+        context.scene["utm32n_anchor"] = list(anchor)
+        context.scene["bbox_utm32n"] = [
+            anchor[0], anchor[1],
+            anchor[0] + size[0], anchor[1] + size[1],
+        ]
 
-            terrain = terrain_setup.build_terrain_from_heightmap(
-                str(heightmap_path),
-                size_meters=size,
-                subdivisions=self.subdivisions,
-                strength=self.strength,
-                anchor_utm32n=anchor,
-            )
-            context.scene["terrain_object_name"] = terrain.name
-
-        self.report({"INFO"}, f"Terrain created: {terrain.name} ({size[0]:.0f}×{size[1]:.0f} m)")
+        terrain = terrain_setup.build_terrain_from_heightmap(
+            str(heightmap_path),
+            size_meters=size,
+            subdivisions=self.subdivisions,
+            strength=self.strength,
+            anchor_utm32n=anchor,
+        )
+        context.scene["terrain_object_name"] = terrain.name
+        self.report({"INFO"}, f"Terrain: {terrain.name} ({size[0]:.0f}×{size[1]:.0f} m)")
         return {"FINISHED"}
 
     def invoke(self, context, event):
@@ -193,13 +193,17 @@ class BLENDERTOOLS_OT_import_dgm5_zip(bpy.types.Operator):
                 if p.suffix.lower() == ".zip" and p.is_file():
                     zips.append(p)
         if not zips:
-            zips = list(directory.glob("*.zip"))
+            zips = sorted(directory.glob("*.zip"))
         if not zips:
             self.report({"ERROR"}, "No .zip files found")
             return {"CANCELLED"}
 
         out_dir = directory / "converted_tifs"
-        tifs = geo_import.dgm5_xyz_to_geotiffs(zips, out_dir)
+        try:
+            tifs = geo_import.dgm5_xyz_to_geotiffs(zips, out_dir)
+        except Exception as e:
+            self.report({"ERROR"}, f"DGM5 conversion failed: {e}")
+            return {"CANCELLED"}
         self.report({"INFO"}, f"Converted {len(tifs)} GeoTIFFs to {out_dir}")
 
         if self.build_terrain and tifs:

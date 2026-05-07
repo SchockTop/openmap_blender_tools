@@ -84,6 +84,12 @@ def assemble(staging: Path, manifest: dict) -> None:
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc",
                                                       "*.blend1"))
 
+    # 2d. Copy vendored GDAL binaries (Windows 64-bit).
+    gdal_src = HERE / "vendor" / "gdal-win64"
+    if gdal_src.is_dir():
+        shutil.copytree(gdal_src, staging / "vendor" / "gdal-win64",
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+
     # 3. Copy wheels declared in manifest.
     wheels_dir = staging / "wheels"
     wheels_dir.mkdir()

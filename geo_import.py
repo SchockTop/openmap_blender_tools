@@ -64,6 +64,35 @@ def _resolve_gdal_bin(name: str, explicit: Optional[str] = None) -> str:
     return name
 
 
+def geotiff_metadata(tif_path: Path) -> dict:
+    """Read GeoTIFF size and geo-extent via gdalinfo (no PIL/rasterio needed).
+
+    Returns dict with keys: width, height, pixel_x, pixel_y, origin_x, origin_y,
+    size_meters_x, size_meters_y.
+    """
+    import json as _json
+    gdalinfo_bin = _resolve_gdal_bin("gdalinfo")
+    env = _vendored_gdal_env()
+    raw = subprocess.check_output(
+        [gdalinfo_bin, "-json", str(tif_path)],
+        env=env, stderr=subprocess.DEVNULL,
+    )
+    info = _json.loads(raw)
+    w, h = info["size"]
+    gt = info.get("geoTransform", [0, 1, 0, 0, 0, -1])
+    pixel_x = abs(gt[1])
+    pixel_y = abs(gt[5])
+    origin_x = gt[0]
+    origin_y = gt[3]
+    return {
+        "width": w, "height": h,
+        "pixel_x": pixel_x, "pixel_y": pixel_y,
+        "origin_x": origin_x, "origin_y": origin_y,
+        "size_meters_x": w * pixel_x,
+        "size_meters_y": h * pixel_y,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Pure-Python helpers (unit-testable without GDAL)
 # ---------------------------------------------------------------------------
