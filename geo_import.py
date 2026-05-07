@@ -234,6 +234,69 @@ def dgm_tif_to_heightmap(
 dgm_tif_to_exr_heightmap = dgm_tif_to_heightmap
 
 
+def dgm5_xyz_to_geotiffs(
+    zip_paths: list[Path],
+    out_dir: Path,
+    srs: str = "EPSG:25832",
+    gdal_bin: Optional[str] = None,
+) -> list[Path]:
+    """Extract DGM5 XYZ-ASCII .zip archives and convert each to GeoTIFF.
+
+    Bayern serves DGM5 as zipped XYZ text files (space-separated
+    ``easting northing elevation``).  GDAL's XYZ driver reads these
+    natively; we just need to unzip first, then ``gdal_translate``.
+
+    Args:
+        zip_paths: .zip files, each containing one .txt/.xyz ASCII grid.
+        out_dir: Directory for the output GeoTIFFs.
+        srs: Spatial reference to assign (the XYZ files have no CRS header).
+        gdal_bin: Override for ``gdal_translate``; defaults to vendored copy.
+
+    Returns:
+        List of output .tif paths (one per input zip).
+    """
+    import zipfile
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    gdal_bin = _resolve_gdal_bin("gdal_translate", gdal_bin)
+    env = _vendored_gdal_env()
+    result: list[Path] = []
+
+    for zp in zip_paths:
+        zp = Path(zp)
+        if not zp.is_file():
+            print(f"[dgm5] warning: {zp} not found, skipping", file=sys.stderr)
+            continue
+        with zipfile.ZipFile(zp) as zf:
+            txt_names = [n for n in zf.namelist()
+                         if n.lower().endswith((".txt", ".xyz"))]
+            if not txt_names:
+                print(f"[dgm5] warning: no .txt/.xyz in {zp.name}, skipping",
+                      file=sys.stderr)
+                continue
+            for txt_name in txt_names:
+                extracted = Path(zf.extract(txt_name, out_dir))
+                out_tif = out_dir / (extracted.stem + ".tif")
+                cmd = [
+                    gdal_bin,
+                    "-a_srs", srs,
+                    "-ot", "Float32",
+                    "-of", "GTiff",
+                    "-co", "COMPRESS=LZW",
+                    "-co", "PREDICTOR=3",
+                    "-co", "TILED=YES",
+                    str(extracted),
+                    str(out_tif),
+                ]
+                subprocess.run(cmd, check=True, env=env)
+                extracted.unlink()
+                result.append(out_tif)
+                print(f"[dgm5] {zp.name}/{txt_name} -> {out_tif.name}")
+
+    return result
+
+
 def dop_to_udim_tiles(
     input_orthos: list[Path],
     bbox_utm32n: tuple[float, float, float, float],
