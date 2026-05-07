@@ -3,4 +3,5 @@ __pycache__/
 *.blend1
 .pytest_cache/
 build/
-dist/*.zip
+dist/
+*.egg-info/
