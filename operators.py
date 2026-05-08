@@ -105,10 +105,11 @@ class BLENDERTOOLS_OT_import_heightmap(bpy.types.Operator):
     directory: StringProperty(subtype="DIR_PATH")
     filter_glob: StringProperty(default="*.tif;*.tiff", options={"HIDDEN"})
     files: bpy.props.CollectionProperty(type=bpy.types.OperatorFileListElement)
-    subdivisions: IntProperty(name="Subdivisions", default=8, min=1, max=12)
+    subdivisions: IntProperty(name="Subdivisions (0 = auto)", default=0, min=0, max=14)
     strength: FloatProperty(name="Displacement strength", default=1.0, min=0.01)
 
     def execute(self, context):
+        import math
         from . import geo_import, terrain_setup
 
         directory = Path(self.directory) if self.directory else Path(self.filepath).parent
@@ -128,7 +129,6 @@ class BLENDERTOOLS_OT_import_heightmap(bpy.types.Operator):
             self.report({"ERROR"}, "No .tif files selected")
             return {"CANCELLED"}
 
-        # Mosaic into a single heightmap, then read metadata via gdalinfo.
         proc_dir = directory / "_openmap_processed"
         proc_dir.mkdir(parents=True, exist_ok=True)
         heightmap_path = proc_dir / "heightmap.tif"
@@ -153,10 +153,19 @@ class BLENDERTOOLS_OT_import_heightmap(bpy.types.Operator):
             anchor[0] + size[0], anchor[1] + size[1],
         ]
 
+        subdivisions = self.subdivisions
+        if subdivisions == 0:
+            max_dim_m = max(size[0], size[1])
+            pixel_res = min(meta["pixel_x"], meta["pixel_y"])
+            vertices_needed = max_dim_m / pixel_res
+            subdivisions = max(6, min(14, int(math.ceil(math.log2(vertices_needed)))))
+            self.report({"INFO"}, f"Auto subdivisions: {subdivisions} "
+                        f"({2**subdivisions + 1} verts/side for {max_dim_m:.0f}m @ {pixel_res:.1f}m/px)")
+
         terrain = terrain_setup.build_terrain_from_heightmap(
             str(heightmap_path),
             size_meters=size,
-            subdivisions=self.subdivisions,
+            subdivisions=subdivisions,
             strength=self.strength,
             anchor_utm32n=anchor,
         )
@@ -180,7 +189,7 @@ class BLENDERTOOLS_OT_import_dgm5_zip(bpy.types.Operator):
     filter_glob: StringProperty(default="*.zip", options={"HIDDEN"})
     files: bpy.props.CollectionProperty(type=bpy.types.OperatorFileListElement)
     build_terrain: BoolProperty(name="Build terrain mesh", default=True)
-    subdivisions: IntProperty(name="Subdivisions", default=9, min=1, max=15)
+    subdivisions: IntProperty(name="Subdivisions (0 = auto)", default=0, min=0, max=14)
 
     def execute(self, context):
         from . import geo_import
@@ -227,18 +236,31 @@ class BLENDERTOOLS_OT_import_ortho(bpy.types.Operator):
     bl_label = "Import Orthophoto"
     bl_options = {"REGISTER", "UNDO"}
 
+    filepath: StringProperty(subtype="FILE_PATH")
     directory: StringProperty(subtype="DIR_PATH")
     filter_glob: StringProperty(default="*.tif;*.tiff", options={"HIDDEN"})
+    files: bpy.props.CollectionProperty(type=bpy.types.OperatorFileListElement)
     tile_resolution: IntProperty(name="Tile resolution (px)", default=2048, min=256, max=8192)
 
     def execute(self, context):
         import math
         from . import geo_import, terrain_setup
 
-        directory = Path(self.directory)
-        tifs = sorted(directory.glob("*.tif")) + sorted(directory.glob("*.tiff"))
+        directory = Path(self.directory) if self.directory else Path(self.filepath).parent
+        tifs = []
+        if self.files:
+            for f in self.files:
+                p = directory / f.name
+                if p.suffix.lower() in (".tif", ".tiff") and p.is_file():
+                    tifs.append(p)
+        if not tifs and self.filepath:
+            fp = Path(self.filepath)
+            if fp.suffix.lower() in (".tif", ".tiff") and fp.is_file():
+                tifs = [fp]
         if not tifs:
-            self.report({"ERROR"}, f"No .tif files in {directory}")
+            tifs = sorted(directory.glob("*.tif")) + sorted(directory.glob("*.tiff"))
+        if not tifs:
+            self.report({"ERROR"}, f"No .tif files selected")
             return {"CANCELLED"}
 
         terrain = _find_terrain(context)
