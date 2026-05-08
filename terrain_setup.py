@@ -189,6 +189,9 @@ def apply_ortho_drape(plane_obj: Any, ortho_dir: str | Path,
     geo_import.dop_to_udim_tiles), creates a Blender Image data-block in UDIM
     mode, builds a minimal Principled BSDF material with the image as Base
     Color, and assigns it to the plane.
+
+    UVs are rescaled from the default 0-1 square to span the full UDIM grid
+    so that all tiles are sampled, not just tile 1001.
     """
     bpy = _require_bpy()
     ortho_dir = Path(ortho_dir)
@@ -196,12 +199,19 @@ def apply_ortho_drape(plane_obj: Any, ortho_dir: str | Path,
     if not tiles:
         raise FileNotFoundError(f"no ortho.*.jpg tiles in {ortho_dir}")
 
-    # Load first tile, then add the rest as UDIM tiles on the same Image.
+    # Derive grid dimensions from tile UDIM numbers.
+    udim_numbers = []
+    for tile in tiles:
+        udim_numbers.append(int(tile.stem.split(".")[1]))
+    u_indices = [(u - 1001) % 10 for u in udim_numbers]
+    v_indices = [(u - 1001) // 10 for u in udim_numbers]
+    u_tiles = max(u_indices) + 1
+    v_tiles = max(v_indices) + 1
+
+    # Load first tile, then register the rest as UDIM tiles on the same Image.
     first = tiles[0]
     img = bpy.data.images.load(str(first), check_existing=True)
     img.source = "TILED"
-    # Tile 0 (1001) is implicit. Add the others.
-    base_udim = int(first.stem.split(".")[1])  # "ortho.1001" -> 1001
     if hasattr(img, "tiles"):
         for tile in tiles[1:]:
             udim = int(tile.stem.split(".")[1])
@@ -210,11 +220,18 @@ def apply_ortho_drape(plane_obj: Any, ortho_dir: str | Path,
             except Exception:
                 pass
 
+    # Rescale UVs from 0-1 to span the full UDIM grid.
+    mesh = plane_obj.data
+    if mesh.uv_layers:
+        uv_layer = mesh.uv_layers.active
+        for loop in uv_layer.data:
+            loop.uv.x *= u_tiles
+            loop.uv.y *= v_tiles
+
     mat = bpy.data.materials.new(name=material_name)
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
     links = mat.node_tree.links
-    # Wipe defaults and rebuild.
     for n in list(nodes):
         nodes.remove(n)
     out = nodes.new("ShaderNodeOutputMaterial")
@@ -226,7 +243,6 @@ def apply_ortho_drape(plane_obj: Any, ortho_dir: str | Path,
     links.new(uv.outputs["UV"], tex.inputs["Vector"])
     links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
     links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
-    # Roughness up so terrain doesn't look like wet plastic.
     if "Roughness" in bsdf.inputs:
         bsdf.inputs["Roughness"].default_value = 0.85
 
