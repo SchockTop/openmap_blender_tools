@@ -31,6 +31,19 @@ _DEFAULT_WORKFLOW_ROOT = os.environ.get(
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _icon(name: str) -> str:
+    """Return *name* if it exists in this Blender build, else 'NONE'."""
+    import bpy.types
+    try:
+        UILayout = bpy.types.UILayout
+        prop = UILayout.bl_rna.functions["operator"].parameters["icon"]
+        if name in prop.enum_items:
+            return name
+    except Exception:
+        pass
+    return "NONE"
+
+
 def _find_terrain(context):
     scene = context.scene
     name = scene.get("terrain_object_name")
@@ -899,12 +912,12 @@ class BLENDERTOOLS_PT_import(bpy.types.Panel):
 
     def draw(self, context):
         col = self.layout.column(align=True)
-        col.operator("blender_tools.import_heightmap", icon="MESH_GRID")
-        col.operator("blender_tools.import_dgm5_zip", icon="FILE_ARCHIVE")
-        col.operator("blender_tools.import_ortho", icon="IMAGE_DATA")
-        col.operator("blender_tools.import_buildings", icon="HOME")
-        col.operator("blender_tools.import_csv_path", icon="CURVE_DATA")
-        col.operator("blender_tools.import_vdb_cloud", icon="VOLUME_DATA")
+        col.operator("blender_tools.import_heightmap", icon=_icon("MESH_GRID"))
+        col.operator("blender_tools.import_dgm5_zip", icon=_icon("FILE_ARCHIVE"))
+        col.operator("blender_tools.import_ortho", icon=_icon("IMAGE_DATA"))
+        col.operator("blender_tools.import_buildings", icon=_icon("HOME"))
+        col.operator("blender_tools.import_csv_path", icon=_icon("CURVE_DATA"))
+        col.operator("blender_tools.import_vdb_cloud", icon=_icon("VOLUME_DATA"))
 
 
 class BLENDERTOOLS_PT_scene_setup(bpy.types.Panel):
@@ -918,17 +931,17 @@ class BLENDERTOOLS_PT_scene_setup(bpy.types.Panel):
         col = self.layout.column(align=True)
 
         row = col.row(align=True)
-        row.operator("blender_tools.apply_sky_preset", icon="LIGHT_SUN")
+        row.operator("blender_tools.apply_sky_preset", icon=_icon("LIGHT_SUN"))
 
         row = col.row(align=True)
-        row.operator("blender_tools.apply_quality", icon="RENDERLAYERS")
+        row.operator("blender_tools.apply_quality", icon=_icon("RENDERLAYERS"))
 
         col.separator()
-        col.operator("blender_tools.apply_ground_shader", icon="TEXTURE")
-        col.operator("blender_tools.apply_building_textures", icon="MATERIAL")
-        col.operator("blender_tools.scatter_trees", icon="OUTLINER_OB_FORCE_FIELD")
-        col.operator("blender_tools.scatter_groundcover", icon="HAIR")
-        col.operator("blender_tools.add_domain_cube", icon="MOD_FLUID")
+        col.operator("blender_tools.apply_ground_shader", icon=_icon("TEXTURE"))
+        col.operator("blender_tools.apply_building_textures", icon=_icon("MATERIAL"))
+        col.operator("blender_tools.scatter_trees", icon=_icon("OUTLINER_OB_FORCE_FIELD"))
+        col.operator("blender_tools.scatter_groundcover", icon=_icon("OUTLINER_DATA_CURVES"))
+        col.operator("blender_tools.add_domain_cube", icon=_icon("MOD_FLUID"))
 
 
 class BLENDERTOOLS_PT_camera(bpy.types.Panel):
@@ -941,9 +954,9 @@ class BLENDERTOOLS_PT_camera(bpy.types.Panel):
 
     def draw(self, context):
         col = self.layout.column(align=True)
-        col.operator("blender_tools.apply_camera_preset", icon="CAMERA_DATA")
-        col.operator("blender_tools.setup_camera_rig", icon="CON_CAMERASOLVER")
-        col.operator("blender_tools.attach_to_path", icon="CON_FOLLOWPATH")
+        col.operator("blender_tools.apply_camera_preset", icon=_icon("CAMERA_DATA"))
+        col.operator("blender_tools.setup_camera_rig", icon=_icon("CON_CAMERASOLVER"))
+        col.operator("blender_tools.attach_to_path", icon=_icon("CON_FOLLOWPATH"))
 
 
 class BLENDERTOOLS_PT_quick_actions(bpy.types.Panel):
@@ -955,23 +968,22 @@ class BLENDERTOOLS_PT_quick_actions(bpy.types.Panel):
 
     def draw(self, context):
         col = self.layout.column(align=True)
-        col.operator("blender_tools.quick_scene_from_folder", icon="WORLD")
-        col.operator("blender_tools.render_preview", icon="RENDER_STILL")
+        col.operator("blender_tools.quick_scene_from_folder", icon=_icon("WORLD"))
+        col.operator("blender_tools.render_preview", icon=_icon("RENDER_STILL"))
         col.separator()
-        col.operator("blender_tools.full_pipeline", icon="PLAY")
+        col.operator("blender_tools.full_pipeline", icon=_icon("PLAY"))
 
-        # Scene info
         scene = context.scene
         if scene.get("utm32n_anchor"):
             box = col.box()
             a = scene["utm32n_anchor"]
-            box.label(text=f"Anchor: {a[0]:.0f} E, {a[1]:.0f} N", icon="PIVOT_CURSOR")
+            box.label(text=f"Anchor: {a[0]:.0f} E, {a[1]:.0f} N", icon=_icon("PIVOT_CURSOR"))
             if scene.get("terrain_object_name"):
-                box.label(text=f"Terrain: {scene['terrain_object_name']}", icon="CHECKMARK")
+                box.label(text=f"Terrain: {scene['terrain_object_name']}", icon=_icon("CHECKMARK"))
             if scene.get("ortho_dir"):
-                box.label(text="Ortho: loaded", icon="CHECKMARK")
+                box.label(text="Ortho: loaded", icon=_icon("CHECKMARK"))
             if scene.get("building_collection_name"):
-                box.label(text=f"Buildings: {scene['building_collection_name']}", icon="CHECKMARK")
+                box.label(text=f"Buildings: {scene['building_collection_name']}", icon=_icon("CHECKMARK"))
 
 
 class BLENDERTOOLS_PT_tools(bpy.types.Panel):
@@ -984,9 +996,9 @@ class BLENDERTOOLS_PT_tools(bpy.types.Panel):
 
     def draw(self, context):
         col = self.layout.column(align=True)
-        col.operator("blender_tools.cull_hidden", icon="GHOST_DISABLED")
-        col.operator("blender_tools.clean_cad_mesh", icon="MESH_DATA")
-        col.operator("blender_tools.compute_ndvi", icon="NODE_TEXTURE")
+        col.operator("blender_tools.cull_hidden", icon=_icon("GHOST_DISABLED"))
+        col.operator("blender_tools.clean_cad_mesh", icon=_icon("MESH_DATA"))
+        col.operator("blender_tools.compute_ndvi", icon=_icon("NODE_TEXTURE"))
 
 
 # ---------------------------------------------------------------------------
