@@ -332,6 +332,7 @@ class FakeNode:
     def __init__(self, t):
         self.type = _TYPE_MAP.get(t, t)
         self.image = None; self.extension = None
+        self.uv_map = ""
         self.inputs = _SocketDict()
         self.outputs = _SocketDict()
 
@@ -388,6 +389,32 @@ class FakeUVLayer:
         self.data = loops
 
 
+class FakeUVLayers:
+    """Mimics bpy mesh.uv_layers with .new(), .active, and truthiness."""
+
+    def __init__(self, layers=None):
+        self._layers = layers or []
+        self.active = self._layers[0] if self._layers else None
+
+    def __bool__(self):
+        return len(self._layers) > 0
+
+    def new(self, name=""):
+        # Blender's uv_layers.new() creates a layer with the same loop count.
+        loop_count = len(self.active.data) if self.active else 0
+        new_loops = [FakeUVLoop(0.0, 0.0) for _ in range(loop_count)]
+        layer = FakeUVLayer(new_loops)
+        layer.name = name
+        self._layers.append(layer)
+        return layer
+
+    def __iter__(self):
+        return iter(self._layers)
+
+    def __len__(self):
+        return len(self._layers)
+
+
 def _make_ortho_drape_fakes(uv_loops=None):
     """Build fake bpy + mesh object with optional UV data for ortho-drape tests."""
     captured = {}
@@ -401,14 +428,11 @@ def _make_ortho_drape_fakes(uv_loops=None):
         def __init__(self):
             self.materials = []
             if uv_loops is not None:
-                self.uv_layers = type("UVLayers", (), {
-                    "active": FakeUVLayer(uv_loops),
-                    "__bool__": lambda s: True,
-                })()
+                base_layer = FakeUVLayer(uv_loops)
+                base_layer.name = "UVMap"
+                self.uv_layers = FakeUVLayers([base_layer])
             else:
-                self.uv_layers = type("UVLayers", (), {
-                    "__bool__": lambda s: False,
-                })()
+                self.uv_layers = FakeUVLayers()
 
     class FakeObj:
         def __init__(self): self.data = FakeMesh()
@@ -439,11 +463,10 @@ def test_apply_ortho_drape_builds_udim_material(monkeypatch, tmp_path):
     assert "OUTPUT_MATERIAL" in types
 
 
-def test_apply_ortho_drape_scales_uvs_for_multi_tile(monkeypatch, tmp_path):
-    """UVs must be scaled from 0-1 to span the full UDIM grid.
+def test_apply_ortho_drape_ortho_uv_scaled_for_multi_tile(monkeypatch, tmp_path):
+    """OrthoUV layer must be scaled to span the full UDIM grid.
 
-    For a 2-column x 2-row grid (tiles 1001, 1002, 1011, 1012),
-    a UV at (1.0, 1.0) must become (2.0, 2.0).
+    For a 2x2 grid, the OrthoUV at (1.0, 1.0) must become (2.0, 2.0).
     """
     from blender_tools import terrain_setup
 
@@ -460,18 +483,19 @@ def test_apply_ortho_drape_scales_uvs_for_multi_tile(monkeypatch, tmp_path):
     monkeypatch.setattr(terrain_setup, "_require_bpy", lambda: fake_bpy)
     terrain_setup.apply_ortho_drape(obj, tmp_path)
 
-    assert loops[0].uv.x == pytest.approx(0.0)
-    assert loops[0].uv.y == pytest.approx(0.0)
-    assert loops[1].uv.x == pytest.approx(2.0)  # u_tiles = 2
-    assert loops[1].uv.y == pytest.approx(0.0)
-    assert loops[2].uv.x == pytest.approx(2.0)
-    assert loops[2].uv.y == pytest.approx(2.0)  # v_tiles = 2
-    assert loops[3].uv.x == pytest.approx(0.0)
-    assert loops[3].uv.y == pytest.approx(2.0)
+    ortho_layer = [l for l in obj.data.uv_layers if l.name == "OrthoUV"][0]
+    assert ortho_layer.data[0].uv.x == pytest.approx(0.0)
+    assert ortho_layer.data[0].uv.y == pytest.approx(0.0)
+    assert ortho_layer.data[1].uv.x == pytest.approx(2.0)
+    assert ortho_layer.data[1].uv.y == pytest.approx(0.0)
+    assert ortho_layer.data[2].uv.x == pytest.approx(2.0)
+    assert ortho_layer.data[2].uv.y == pytest.approx(2.0)
+    assert ortho_layer.data[3].uv.x == pytest.approx(0.0)
+    assert ortho_layer.data[3].uv.y == pytest.approx(2.0)
 
 
-def test_apply_ortho_drape_single_tile_uvs_unchanged(monkeypatch, tmp_path):
-    """With only tile 1001 (1x1 grid), UVs should stay in the 0-1 range."""
+def test_apply_ortho_drape_single_tile_ortho_uv_stays_0_1(monkeypatch, tmp_path):
+    """With only tile 1001 (1x1 grid), OrthoUV should stay in the 0-1 range."""
     from blender_tools import terrain_setup
 
     (tmp_path / "ortho.1001.jpg").write_bytes(b"fake")
@@ -481,14 +505,15 @@ def test_apply_ortho_drape_single_tile_uvs_unchanged(monkeypatch, tmp_path):
     monkeypatch.setattr(terrain_setup, "_require_bpy", lambda: fake_bpy)
     terrain_setup.apply_ortho_drape(obj, tmp_path)
 
-    assert loops[0].uv.x == pytest.approx(0.5)
-    assert loops[0].uv.y == pytest.approx(0.5)
-    assert loops[1].uv.x == pytest.approx(1.0)
-    assert loops[1].uv.y == pytest.approx(1.0)
+    ortho_layer = [l for l in obj.data.uv_layers if l.name == "OrthoUV"][0]
+    assert ortho_layer.data[0].uv.x == pytest.approx(0.5)
+    assert ortho_layer.data[0].uv.y == pytest.approx(0.5)
+    assert ortho_layer.data[1].uv.x == pytest.approx(1.0)
+    assert ortho_layer.data[1].uv.y == pytest.approx(1.0)
 
 
 def test_apply_ortho_drape_wide_grid_scales_u_only(monkeypatch, tmp_path):
-    """A 4x1 grid should scale U by 4, leave V at 1."""
+    """A 4x1 grid should scale OrthoUV U by 4, leave V at 1."""
     from blender_tools import terrain_setup
 
     for u in range(4):
@@ -499,8 +524,9 @@ def test_apply_ortho_drape_wide_grid_scales_u_only(monkeypatch, tmp_path):
     monkeypatch.setattr(terrain_setup, "_require_bpy", lambda: fake_bpy)
     terrain_setup.apply_ortho_drape(obj, tmp_path)
 
-    assert loops[0].uv.x == pytest.approx(4.0)
-    assert loops[0].uv.y == pytest.approx(1.0)
+    ortho_layer = [l for l in obj.data.uv_layers if l.name == "OrthoUV"][0]
+    assert ortho_layer.data[0].uv.x == pytest.approx(4.0)
+    assert ortho_layer.data[0].uv.y == pytest.approx(1.0)
 
 
 def test_apply_ortho_drape_image_set_to_tiled(monkeypatch, tmp_path):
@@ -511,24 +537,15 @@ def test_apply_ortho_drape_image_set_to_tiled(monkeypatch, tmp_path):
         (tmp_path / f"ortho.{udim}.jpg").write_bytes(b"fake")
 
     captured_images = []
-    orig_load = FakeImage.__init__
 
     class TrackingImage(FakeImage):
         def __init__(self, name):
             super().__init__(name)
             captured_images.append(self)
 
-    class TrackingData:
-        def __init__(self): self.materials = self; self.images = self
-        def new(self, name): return FakeMaterial(name)
-        def load(self, fp, check_existing=False): return TrackingImage(fp)
-
-    fake_bpy = type("B", (), {"data": TrackingData()})()
-    obj_class = type("Obj", (), {"data": type("M", (), {
-        "materials": [],
-        "uv_layers": type("UVL", (), {"__bool__": lambda s: False})(),
-    })()})
-    obj = obj_class()
+    fake_bpy, obj, _ = _make_ortho_drape_fakes()
+    # Patch the load method to track the created image.
+    fake_bpy.data.load = lambda fp, check_existing=False: TrackingImage(fp)
     monkeypatch.setattr(terrain_setup, "_require_bpy", lambda: fake_bpy)
     terrain_setup.apply_ortho_drape(obj, tmp_path)
 
@@ -563,6 +580,73 @@ def test_apply_ortho_drape_registers_extra_tiles(monkeypatch, tmp_path):
     assert 1003 in registered_udims
     assert 1011 in registered_udims
     assert 1001 not in registered_udims  # implicit first tile
+
+
+def test_apply_ortho_drape_does_not_modify_original_uvs(monkeypatch, tmp_path):
+    """Original UV layer (used by displacement) must NOT be modified.
+
+    This is the bug that caused height data to get scrambled when ortho was
+    applied after heightmap: the displacement modifier samples via the same
+    UV layer, so scaling it to UDIM range breaks heightmap sampling.
+    """
+    from blender_tools import terrain_setup
+
+    for udim in (1001, 1002, 1011, 1012):
+        (tmp_path / f"ortho.{udim}.jpg").write_bytes(b"fake")
+
+    original_loops = [
+        FakeUVLoop(0.0, 0.0),
+        FakeUVLoop(0.5, 0.0),
+        FakeUVLoop(1.0, 1.0),
+        FakeUVLoop(0.0, 1.0),
+    ]
+    fake_bpy, obj, _ = _make_ortho_drape_fakes(uv_loops=original_loops)
+    monkeypatch.setattr(terrain_setup, "_require_bpy", lambda: fake_bpy)
+    terrain_setup.apply_ortho_drape(obj, tmp_path)
+
+    # Original UVs must be untouched (still 0-1 range for displacement).
+    assert original_loops[0].uv.x == pytest.approx(0.0)
+    assert original_loops[0].uv.y == pytest.approx(0.0)
+    assert original_loops[1].uv.x == pytest.approx(0.5)
+    assert original_loops[1].uv.y == pytest.approx(0.0)
+    assert original_loops[2].uv.x == pytest.approx(1.0)
+    assert original_loops[2].uv.y == pytest.approx(1.0)
+    assert original_loops[3].uv.x == pytest.approx(0.0)
+    assert original_loops[3].uv.y == pytest.approx(1.0)
+
+
+def test_apply_ortho_drape_creates_separate_uv_layer(monkeypatch, tmp_path):
+    """A new UV layer named 'OrthoUV' must be created for UDIM sampling."""
+    from blender_tools import terrain_setup
+
+    for udim in (1001, 1002):
+        (tmp_path / f"ortho.{udim}.jpg").write_bytes(b"fake")
+
+    loops = [FakeUVLoop(0.0, 0.0), FakeUVLoop(1.0, 1.0)]
+    fake_bpy, obj, _ = _make_ortho_drape_fakes(uv_loops=loops)
+    monkeypatch.setattr(terrain_setup, "_require_bpy", lambda: fake_bpy)
+    terrain_setup.apply_ortho_drape(obj, tmp_path)
+
+    layer_names = [l.name for l in obj.data.uv_layers]
+    assert "UVMap" in layer_names, "Original UV layer must still exist"
+    assert "OrthoUV" in layer_names, "Ortho UV layer must be created"
+
+
+def test_apply_ortho_drape_material_references_ortho_uv(monkeypatch, tmp_path):
+    """The UVMap node in the material must reference the OrthoUV layer."""
+    from blender_tools import terrain_setup
+
+    for udim in (1001, 1002):
+        (tmp_path / f"ortho.{udim}.jpg").write_bytes(b"fake")
+
+    loops = [FakeUVLoop(0.0, 0.0), FakeUVLoop(1.0, 1.0)]
+    fake_bpy, obj, _ = _make_ortho_drape_fakes(uv_loops=loops)
+    monkeypatch.setattr(terrain_setup, "_require_bpy", lambda: fake_bpy)
+    mat = terrain_setup.apply_ortho_drape(obj, tmp_path)
+
+    uv_nodes = [n for n in mat.node_tree.nodes if n.type == "UVMAP"]
+    assert len(uv_nodes) == 1
+    assert uv_nodes[0].uv_map == "OrthoUV"
 
 
 # ---------------------------------------------------------------------------

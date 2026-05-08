@@ -220,13 +220,16 @@ def apply_ortho_drape(plane_obj: Any, ortho_dir: str | Path,
             except Exception:
                 pass
 
-    # Rescale UVs from 0-1 to span the full UDIM grid.
+    # Create a separate UV layer for ortho UDIM sampling, scaled to the tile
+    # grid. The original UV layer (used by the displacement modifier for
+    # heightmap sampling) must stay in the 0-1 range.
     mesh = plane_obj.data
-    if mesh.uv_layers:
-        uv_layer = mesh.uv_layers.active
-        for loop in uv_layer.data:
-            loop.uv.x *= u_tiles
-            loop.uv.y *= v_tiles
+    ortho_uv = mesh.uv_layers.new(name="OrthoUV")
+    if mesh.uv_layers.active:
+        src = mesh.uv_layers.active
+        for i, loop in enumerate(ortho_uv.data):
+            loop.uv.x = src.data[i].uv.x * u_tiles
+            loop.uv.y = src.data[i].uv.y * v_tiles
 
     mat = bpy.data.materials.new(name=material_name)
     mat.use_nodes = True
@@ -238,6 +241,7 @@ def apply_ortho_drape(plane_obj: Any, ortho_dir: str | Path,
     bsdf = nodes.new("ShaderNodeBsdfPrincipled")
     tex = nodes.new("ShaderNodeTexImage")
     uv = nodes.new("ShaderNodeUVMap")
+    uv.uv_map = "OrthoUV"
     tex.image = img
     tex.extension = "EXTEND"
     links.new(uv.outputs["UV"], tex.inputs["Vector"])
