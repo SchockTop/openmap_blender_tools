@@ -311,70 +311,311 @@ class TestBuildTerrainUnderMockedBpy:
         assert callable(mod.build_terrain_from_heightmap)
 
 
-def test_apply_ortho_drape_builds_udim_material(monkeypatch, tmp_path):
-    """apply_ortho_drape attaches a Principled BSDF + UDIM Image Texture."""
-    from blender_tools import terrain_setup
+# ---------------------------------------------------------------------------
+# Shared ortho-drape test helpers
+# ---------------------------------------------------------------------------
 
-    # Create three fake UDIM tiles in the dir.
-    for udim in (1001, 1002, 1011):
-        (tmp_path / f"ortho.{udim}.jpg").write_bytes(b"fake")
 
+class FakeSocket:
+    def __init__(self, name): self.name = name; self.default_value = None
+
+
+_TYPE_MAP = {
+    "ShaderNodeOutputMaterial": "OUTPUT_MATERIAL",
+    "ShaderNodeBsdfPrincipled": "BSDF_PRINCIPLED",
+    "ShaderNodeTexImage": "TEX_IMAGE",
+    "ShaderNodeUVMap": "UVMAP",
+}
+
+
+class FakeNode:
+    def __init__(self, t):
+        self.type = _TYPE_MAP.get(t, t)
+        self.image = None; self.extension = None
+        self.inputs = _SocketDict()
+        self.outputs = _SocketDict()
+
+
+class _SocketDict(dict):
+    def __getitem__(self, k):
+        if not dict.__contains__(self, k):
+            dict.__setitem__(self, k, FakeSocket(k))
+        return dict.__getitem__(self, k)
+    def __contains__(self, k):
+        return True
+
+
+class FakeNodeList(list):
+    def new(self, t):
+        n = FakeNode(t); self.append(n); return n
+    def remove(self, n):
+        list.remove(self, n)
+
+
+class FakeLinkList(list):
+    def new(self, a, b):
+        self.append((a, b)); return (a, b)
+
+
+class FakeNodeTree:
+    def __init__(self):
+        self.nodes = FakeNodeList(); self.links = FakeLinkList()
+
+
+class FakeMaterial:
+    def __init__(self, name):
+        self.name = name; self.use_nodes = False
+        self.node_tree = FakeNodeTree()
+
+
+class FakeImage:
+    def __init__(self, name):
+        self.name = name; self.source = None; self.tiles = FakeTileList()
+
+
+class FakeTileList(list):
+    def new(self, tile_number=0, label=""):
+        self.append({"tile_number": tile_number, "label": label})
+
+
+class FakeUVLoop:
+    def __init__(self, u, v):
+        self.uv = type("Vec", (), {"x": u, "y": v})()
+
+
+class FakeUVLayer:
+    def __init__(self, loops):
+        self.data = loops
+
+
+def _make_ortho_drape_fakes(uv_loops=None):
+    """Build fake bpy + mesh object with optional UV data for ortho-drape tests."""
     captured = {}
 
-    class FakeSocket:
-        def __init__(self, name): self.name = name; self.default_value = None
-    _TYPE_MAP = {
-        "ShaderNodeOutputMaterial": "OUTPUT_MATERIAL",
-        "ShaderNodeBsdfPrincipled": "BSDF_PRINCIPLED",
-        "ShaderNodeTexImage": "TEX_IMAGE",
-        "ShaderNodeUVMap": "UVMAP",
-    }
-    class FakeNode:
-        def __init__(self, t):
-            self.type = _TYPE_MAP.get(t, t)
-            self.image = None; self.extension = None
-            self.inputs = _SocketDict()
-            self.outputs = _SocketDict()
-    class _SocketDict(dict):
-        def __getitem__(self, k):
-            if not dict.__contains__(self, k):
-                dict.__setitem__(self, k, FakeSocket(k))
-            return dict.__getitem__(self, k)
-        def __contains__(self, k):
-            return True  # any socket name is "available"
-    class FakeNodeList(list):
-        def new(self, t):
-            n = FakeNode(t); self.append(n); return n
-        def remove(self, n):
-            list.remove(self, n)
-    class FakeLinkList(list):
-        def new(self, a, b):
-            self.append((a, b)); return (a, b)
-    class FakeNodeTree:
-        def __init__(self):
-            self.nodes = FakeNodeList(); self.links = FakeLinkList()
-        def new(self, t):
-            return self.nodes.new(t)
-    class FakeMaterial:
-        def __init__(self, name):
-            self.name = name; self.use_nodes = False
-            self.node_tree = FakeNodeTree()
-    class FakeImage:
-        def __init__(self, name): self.name = name; self.source = None; self.tiles = []
-        def add_tile(self, **kw): self.tiles.append(kw)
     class FakeData:
         def __init__(self): self.materials = self; self.images = self
         def new(self, name): captured["last"] = FakeMaterial(name); return captured["last"]
         def load(self, fp, check_existing=False): return FakeImage(fp)
-    class FakeObj:
-        def __init__(self): self.data = type("M", (), {"materials": []})()
-    fake_bpy = type("B", (), {"data": FakeData()})()
 
+    class FakeMesh:
+        def __init__(self):
+            self.materials = []
+            if uv_loops is not None:
+                self.uv_layers = type("UVLayers", (), {
+                    "active": FakeUVLayer(uv_loops),
+                    "__bool__": lambda s: True,
+                })()
+            else:
+                self.uv_layers = type("UVLayers", (), {
+                    "__bool__": lambda s: False,
+                })()
+
+    class FakeObj:
+        def __init__(self): self.data = FakeMesh()
+
+    fake_bpy = type("B", (), {"data": FakeData()})()
+    return fake_bpy, FakeObj(), captured
+
+
+# ---------------------------------------------------------------------------
+# TestApplyOrthoDrape
+# ---------------------------------------------------------------------------
+
+
+def test_apply_ortho_drape_builds_udim_material(monkeypatch, tmp_path):
+    """apply_ortho_drape attaches a Principled BSDF + UDIM Image Texture."""
+    from blender_tools import terrain_setup
+
+    for udim in (1001, 1002, 1011):
+        (tmp_path / f"ortho.{udim}.jpg").write_bytes(b"fake")
+
+    fake_bpy, obj, _ = _make_ortho_drape_fakes()
     monkeypatch.setattr(terrain_setup, "_require_bpy", lambda: fake_bpy)
-    obj = FakeObj()
     mat = terrain_setup.apply_ortho_drape(obj, tmp_path)
     assert mat.use_nodes is True
     types = [n.type for n in mat.node_tree.nodes]
     assert "TEX_IMAGE" in types
     assert "BSDF_PRINCIPLED" in types
     assert "OUTPUT_MATERIAL" in types
+
+
+def test_apply_ortho_drape_scales_uvs_for_multi_tile(monkeypatch, tmp_path):
+    """UVs must be scaled from 0-1 to span the full UDIM grid.
+
+    For a 2-column x 2-row grid (tiles 1001, 1002, 1011, 1012),
+    a UV at (1.0, 1.0) must become (2.0, 2.0).
+    """
+    from blender_tools import terrain_setup
+
+    for udim in (1001, 1002, 1011, 1012):
+        (tmp_path / f"ortho.{udim}.jpg").write_bytes(b"fake")
+
+    loops = [
+        FakeUVLoop(0.0, 0.0),
+        FakeUVLoop(1.0, 0.0),
+        FakeUVLoop(1.0, 1.0),
+        FakeUVLoop(0.0, 1.0),
+    ]
+    fake_bpy, obj, _ = _make_ortho_drape_fakes(uv_loops=loops)
+    monkeypatch.setattr(terrain_setup, "_require_bpy", lambda: fake_bpy)
+    terrain_setup.apply_ortho_drape(obj, tmp_path)
+
+    assert loops[0].uv.x == pytest.approx(0.0)
+    assert loops[0].uv.y == pytest.approx(0.0)
+    assert loops[1].uv.x == pytest.approx(2.0)  # u_tiles = 2
+    assert loops[1].uv.y == pytest.approx(0.0)
+    assert loops[2].uv.x == pytest.approx(2.0)
+    assert loops[2].uv.y == pytest.approx(2.0)  # v_tiles = 2
+    assert loops[3].uv.x == pytest.approx(0.0)
+    assert loops[3].uv.y == pytest.approx(2.0)
+
+
+def test_apply_ortho_drape_single_tile_uvs_unchanged(monkeypatch, tmp_path):
+    """With only tile 1001 (1x1 grid), UVs should stay in the 0-1 range."""
+    from blender_tools import terrain_setup
+
+    (tmp_path / "ortho.1001.jpg").write_bytes(b"fake")
+
+    loops = [FakeUVLoop(0.5, 0.5), FakeUVLoop(1.0, 1.0)]
+    fake_bpy, obj, _ = _make_ortho_drape_fakes(uv_loops=loops)
+    monkeypatch.setattr(terrain_setup, "_require_bpy", lambda: fake_bpy)
+    terrain_setup.apply_ortho_drape(obj, tmp_path)
+
+    assert loops[0].uv.x == pytest.approx(0.5)
+    assert loops[0].uv.y == pytest.approx(0.5)
+    assert loops[1].uv.x == pytest.approx(1.0)
+    assert loops[1].uv.y == pytest.approx(1.0)
+
+
+def test_apply_ortho_drape_wide_grid_scales_u_only(monkeypatch, tmp_path):
+    """A 4x1 grid should scale U by 4, leave V at 1."""
+    from blender_tools import terrain_setup
+
+    for u in range(4):
+        (tmp_path / f"ortho.{1001 + u}.jpg").write_bytes(b"fake")
+
+    loops = [FakeUVLoop(1.0, 1.0)]
+    fake_bpy, obj, _ = _make_ortho_drape_fakes(uv_loops=loops)
+    monkeypatch.setattr(terrain_setup, "_require_bpy", lambda: fake_bpy)
+    terrain_setup.apply_ortho_drape(obj, tmp_path)
+
+    assert loops[0].uv.x == pytest.approx(4.0)
+    assert loops[0].uv.y == pytest.approx(1.0)
+
+
+def test_apply_ortho_drape_image_set_to_tiled(monkeypatch, tmp_path):
+    """The loaded image must have source set to TILED for UDIM."""
+    from blender_tools import terrain_setup
+
+    for udim in (1001, 1002):
+        (tmp_path / f"ortho.{udim}.jpg").write_bytes(b"fake")
+
+    captured_images = []
+    orig_load = FakeImage.__init__
+
+    class TrackingImage(FakeImage):
+        def __init__(self, name):
+            super().__init__(name)
+            captured_images.append(self)
+
+    class TrackingData:
+        def __init__(self): self.materials = self; self.images = self
+        def new(self, name): return FakeMaterial(name)
+        def load(self, fp, check_existing=False): return TrackingImage(fp)
+
+    fake_bpy = type("B", (), {"data": TrackingData()})()
+    obj_class = type("Obj", (), {"data": type("M", (), {
+        "materials": [],
+        "uv_layers": type("UVL", (), {"__bool__": lambda s: False})(),
+    })()})
+    obj = obj_class()
+    monkeypatch.setattr(terrain_setup, "_require_bpy", lambda: fake_bpy)
+    terrain_setup.apply_ortho_drape(obj, tmp_path)
+
+    assert len(captured_images) == 1
+    assert captured_images[0].source == "TILED"
+
+
+def test_apply_ortho_drape_registers_extra_tiles(monkeypatch, tmp_path):
+    """Tiles beyond 1001 must be registered on the image's tiles collection."""
+    from blender_tools import terrain_setup
+
+    for udim in (1001, 1002, 1003, 1011):
+        (tmp_path / f"ortho.{udim}.jpg").write_bytes(b"fake")
+
+    fake_bpy, obj, _ = _make_ortho_drape_fakes()
+    loaded_img = None
+
+    class CapturingData:
+        def __init__(self): self.materials = self; self.images = self
+        def new(self, name): return FakeMaterial(name)
+        def load(self, fp, check_existing=False):
+            nonlocal loaded_img
+            loaded_img = FakeImage(fp)
+            return loaded_img
+
+    fake_bpy.data = CapturingData()
+    monkeypatch.setattr(terrain_setup, "_require_bpy", lambda: fake_bpy)
+    terrain_setup.apply_ortho_drape(obj, tmp_path)
+
+    registered_udims = [t["tile_number"] for t in loaded_img.tiles]
+    assert 1002 in registered_udims
+    assert 1003 in registered_udims
+    assert 1011 in registered_udims
+    assert 1001 not in registered_udims  # implicit first tile
+
+
+# ---------------------------------------------------------------------------
+# TestAutoSubdivisionCalculation
+# ---------------------------------------------------------------------------
+
+
+class TestAutoSubdivisionCalculation:
+    """Test the auto-subdivision logic from the heightmap import operator.
+
+    The formula: subdivisions = ceil(log2(max_dim_m / pixel_res)), clamped [6, 14].
+    We test the math directly since the operator is bpy-dependent.
+    """
+
+    @staticmethod
+    def _calc_auto_subdivisions(size_x, size_y, pixel_x, pixel_y):
+        import math
+        max_dim_m = max(size_x, size_y)
+        pixel_res = min(pixel_x, pixel_y)
+        vertices_needed = max_dim_m / pixel_res
+        return max(6, min(14, int(math.ceil(math.log2(vertices_needed)))))
+
+    def test_8km_dgm1_gets_13(self):
+        """8km DGM1 (1m pixels) → 8000 vertices needed → log2(8000) ≈ 13."""
+        assert self._calc_auto_subdivisions(8000, 4000, 1.0, 1.0) == 13
+
+    def test_2km_dgm1_gets_11(self):
+        """2km DGM1 (1m pixels) → 2000 vertices → log2(2000) ≈ 11."""
+        assert self._calc_auto_subdivisions(2000, 1000, 1.0, 1.0) == 11
+
+    def test_2km_dgm5_gets_9(self):
+        """2km DGM5 (5m pixels) → 400 vertices → log2(400) ≈ 9."""
+        assert self._calc_auto_subdivisions(2000, 1000, 5.0, 5.0) == 9
+
+    def test_50m_scene_clamps_to_6(self):
+        """Tiny 50m scene → 50 vertices → log2(50) ≈ 6. Clamped at minimum 6."""
+        assert self._calc_auto_subdivisions(50, 50, 1.0, 1.0) == 6
+
+    def test_huge_scene_clamps_to_14(self):
+        """100km DGM1 → 100000 vertices → log2(100000) ≈ 17. Clamped at 14."""
+        assert self._calc_auto_subdivisions(100000, 50000, 1.0, 1.0) == 14
+
+    def test_uses_max_dimension(self):
+        """The longer axis determines subdivision level."""
+        sub_wide = self._calc_auto_subdivisions(8000, 1000, 1.0, 1.0)
+        sub_tall = self._calc_auto_subdivisions(1000, 8000, 1.0, 1.0)
+        assert sub_wide == sub_tall == 13
+
+    def test_uses_finer_pixel_resolution(self):
+        """When pixel_x != pixel_y, the finer resolution is used."""
+        sub = self._calc_auto_subdivisions(4000, 4000, 1.0, 5.0)
+        assert sub == 12  # 4000/1.0 = 4000, log2(4000) ≈ 12
+
+    def test_exact_power_of_two(self):
+        """1024m at 1m/px → exactly 1024 vertices → log2(1024) = 10."""
+        assert self._calc_auto_subdivisions(1024, 512, 1.0, 1.0) == 10
