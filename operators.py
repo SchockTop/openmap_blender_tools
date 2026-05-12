@@ -352,6 +352,45 @@ class BLENDERTOOLS_OT_import_buildings(bpy.types.Operator):
         return {"RUNNING_MODAL"}
 
 
+class BLENDERTOOLS_OT_import_dommesh(bpy.types.Operator):
+    """Import a DOM-Mesh slice (cutout.glb) produced by OpenMap_Unifier.
+
+    Reads the sibling meta.json for the EPSG:25832 anchor and places the mesh in
+    the scene's UTM-local frame (seeding scene["utm32n_anchor"] if unset, like
+    Import Heightmap)."""
+
+    bl_idname = "blender_tools.import_dommesh"
+    bl_label = "Import DOM-Mesh Slice (.glb)"
+    bl_options = {"REGISTER", "UNDO"}
+
+    filepath: StringProperty(subtype="FILE_PATH")
+    filter_glob: StringProperty(default="*.glb", options={"HIDDEN"})
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+    def execute(self, context):
+        from . import dommesh_import
+
+        glb = self.filepath
+        meta = str(Path(glb).parent / "meta.json")
+        meta = meta if Path(meta).exists() else None
+        anchor = _get_scene_anchor(context)
+        try:
+            result = dommesh_import.import_dommesh_glb(glb, meta_path=meta, scene_anchor=anchor)
+        except Exception as e:
+            self.report({"ERROR"}, f"DOM-Mesh import failed: {e}")
+            return {"CANCELLED"}
+        n = len(result["objects"])
+        if result.get("adopted_anchor"):
+            self.report({"INFO"}, f"Imported {n} mesh object(s); set scene anchor "
+                                  f"{tuple(round(v) for v in result['adopted_anchor'])}.")
+        else:
+            self.report({"INFO"}, f"Imported {n} DOM-Mesh object(s).")
+        return {"FINISHED"}
+
+
 class BLENDERTOOLS_OT_import_vdb_cloud(bpy.types.Operator):
     """Import a VDB volume as a cloud object."""
 
@@ -916,6 +955,7 @@ class BLENDERTOOLS_PT_import(bpy.types.Panel):
         col.operator("blender_tools.import_dgm5_zip", icon=_icon("FILE_ARCHIVE"))
         col.operator("blender_tools.import_ortho", icon=_icon("IMAGE_DATA"))
         col.operator("blender_tools.import_buildings", icon=_icon("HOME"))
+        col.operator("blender_tools.import_dommesh", icon=_icon("MESH_DATA"))
         col.operator("blender_tools.import_csv_path", icon=_icon("CURVE_DATA"))
         col.operator("blender_tools.import_vdb_cloud", icon=_icon("VOLUME_DATA"))
 
@@ -1037,6 +1077,7 @@ CLASSES = (
     BLENDERTOOLS_OT_import_dgm5_zip,
     BLENDERTOOLS_OT_import_ortho,
     BLENDERTOOLS_OT_import_buildings,
+    BLENDERTOOLS_OT_import_dommesh,
     BLENDERTOOLS_OT_import_vdb_cloud,
     BLENDERTOOLS_OT_import_csv_path,
     # Scene Setup

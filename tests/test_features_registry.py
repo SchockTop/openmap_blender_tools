@@ -158,3 +158,23 @@ def test_real_registry_imports_buildings_textured():
     import features  # type: ignore
     found = features.discover()
     assert "buildings-textured" in found
+
+
+def test_import_dommesh_operator_registered():
+    """BLENDERTOOLS_OT_import_dommesh must be in operators.CLASSES (AST check, no bpy)."""
+    import ast
+
+    ops_path = Path(__file__).resolve().parent.parent / "operators.py"
+    tree = ast.parse(ops_path.read_text(encoding="utf-8"))
+
+    # Collect all class definitions.
+    class_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
+    assert "BLENDERTOOLS_OT_import_dommesh" in class_names, (
+        "BLENDERTOOLS_OT_import_dommesh class not found in operators.py"
+    )
+
+    # Confirm it appears in the CLASSES tuple assignment.
+    classes_src = ops_path.read_text(encoding="utf-8")
+    assert "BLENDERTOOLS_OT_import_dommesh" in classes_src.split("CLASSES = (")[1].split(")")[0], (
+        "BLENDERTOOLS_OT_import_dommesh not listed in CLASSES tuple"
+    )
