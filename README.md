@@ -35,6 +35,10 @@ the sidebar. A new **OpenMap** tab exposes the full cinematic pipeline:
 The same operator is available headless as
 `bpy.ops.blender_tools.full_pipeline(region="muc-sued-4x2", datasets="dgm1,dop40,lod2")`.
 
+- **Import DOM-Mesh Slice (.glb)** — `BLENDERTOOLS_OT_import_dommesh` imports a textured
+  photogrammetry-mesh slice produced by OpenMap_Unifier (`cutout.glb` + `meta.json`),
+  placing it in the scene's UTM-local frame (seeding `scene["utm32n_anchor"]` if unset).
+
 ## Playbook one-liners
 
 ```python
