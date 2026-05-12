@@ -556,6 +556,13 @@ class BLENDERTOOLS_OT_scatter_trees(bpy.types.Operator):
     bl_label = "Scatter Trees"
     bl_options = {"REGISTER", "UNDO"}
 
+    mask_geotiff: StringProperty(
+        name="Forest mask GeoTIFF",
+        subtype="FILE_PATH",
+        default="",
+        description="Optional Float32 GeoTIFF (0–1) limiting tree density to forested areas",
+    )
+
     def execute(self, context):
         from .features import trees
 
@@ -564,8 +571,9 @@ class BLENDERTOOLS_OT_scatter_trees(bpy.types.Operator):
             self.report({"ERROR"}, "No terrain found")
             return {"CANCELLED"}
         ctx = _build_feature_context(context, terrain=terrain)
-        result = trees.apply(ctx)
-        self.report({"INFO"}, f"Trees scattered ({result.get('template_count', '?')} templates)")
+        mask = self.mask_geotiff if self.mask_geotiff else None
+        result = trees.apply(ctx, mask_geotiff=mask)
+        self.report({"INFO"}, f"Trees scattered ({result.get('trees_template_count', '?')} templates)")
         return {"FINISHED"}
 
 
@@ -872,6 +880,251 @@ class BLENDERTOOLS_OT_quick_scene_from_folder(bpy.types.Operator):
         return {"RUNNING_MODAL"}
 
 
+class BLENDERTOOLS_OT_build_cinematic_scene(bpy.types.Operator):
+    """Build a full cinematic scene from a downloaded or pre-processed data folder.
+
+    Accepts either:
+    - A raw DGM/DOP folder (GDAL runs in-process via vendored binaries).
+    - A pre-processed folder containing heightmap.tif + ortho_udim/ + buildings files.
+      Heuristic: a single large heightmap.tif → skip GDAL mosaic step.
+
+    Runs: terrain → ortho drape → buildings → building textures → sky → quality →
+    ground shader → forest-masked trees → clouds → camera (from flight_path.csv
+    if present, else synthetic preset). Each step is wrapped so failures log a
+    warning and continue.
+    """
+
+    bl_idname = "blender_tools.build_cinematic_scene"
+    bl_label = "Build Cinematic Scene from Folder"
+    bl_options = {"REGISTER", "UNDO"}
+
+    directory: StringProperty(subtype="DIR_PATH")
+    sky_preset: EnumProperty(name="Sky", items=_SKY_PRESETS, default="afternoon")
+    camera_preset: EnumProperty(name="Camera", items=_CAMERA_PRESETS,
+                                default="cinematic-establishing")
+    quality: EnumProperty(name="Quality", items=_QUALITY_PRESETS, default="preview")
+    clouds: BoolProperty(name="Clouds", default=True,
+                         description="Add procedural volumetric cloud layer")
+    cloud_coverage: FloatProperty(name="Cloud coverage", default=0.45,
+                                  min=0.0, max=1.0)
+    trees: BoolProperty(name="Trees", default=True,
+                        description="Scatter 3-D tree instances on terrain")
+    building_textures: BoolProperty(name="Building textures", default=True,
+                                    description="Apply DOP roof projection + PBR walls")
+    groundcover: BoolProperty(name="Groundcover", default=False,
+                              description="Dense grass/bushes (FPV-altitude only)")
+
+    def execute(self, context):
+        import math
+        from . import geo_import, terrain_setup
+
+        directory = Path(self.directory)
+        if not directory.is_dir():
+            self.report({"ERROR"}, f"Not a directory: {directory}")
+            return {"CANCELLED"}
+
+        steps_done: list[str] = []
+        steps_warn: list[str] = []
+
+        def _try(step_name, fn):
+            try:
+                fn()
+                steps_done.append(step_name)
+            except Exception as exc:
+                self.report({"WARNING"}, f"[{step_name}] {exc}")
+                steps_warn.append(step_name)
+
+        # ------------------------------------------------------------------
+        # 1. Terrain — detect pre-processed vs raw tiles
+        # ------------------------------------------------------------------
+        heightmap_path = directory / "heightmap.tif"
+        processed_folder = heightmap_path.is_file()
+
+        if processed_folder:
+            # Pre-processed: single heightmap.tif already mosaiced.
+            def _terrain():
+                meta = geo_import.geotiff_metadata(heightmap_path)
+                size = (meta["size_meters_x"], meta["size_meters_y"])
+                anchor = (meta["origin_x"], meta["origin_y"] - meta["size_meters_y"], 0.0)
+                context.scene["utm32n_anchor"] = list(anchor)
+                context.scene["bbox_utm32n"] = [
+                    anchor[0], anchor[1],
+                    anchor[0] + size[0], anchor[1] + size[1],
+                ]
+                subdivisions = _auto_subdivisions(size, meta)
+                terrain_obj = terrain_setup.build_terrain_from_heightmap(
+                    str(heightmap_path),
+                    size_meters=size,
+                    subdivisions=subdivisions,
+                    strength=1.0,
+                    anchor_utm32n=anchor,
+                )
+                context.scene["terrain_object_name"] = terrain_obj.name
+            _try("terrain (pre-processed)", _terrain)
+        else:
+            tifs = sorted(directory.rglob("*.tif")) + sorted(directory.rglob("*.tiff"))
+            dgm_tifs = [t for t in tifs
+                        if any(k in str(t).lower() for k in ("dgm", "dem", "height"))]
+            if not dgm_tifs and tifs:
+                small = [t for t in tifs if t.stat().st_size < 20_000_000]
+                dgm_tifs = small if small else []
+
+            dgm5_zips = sorted(directory.rglob("*.zip"))
+            dgm5_zips = [z for z in dgm5_zips
+                         if "dgm" in str(z).lower() or z.parent.name.startswith("dgm")]
+
+            if dgm_tifs:
+                def _terrain_raw():
+                    bpy.ops.blender_tools.import_heightmap(
+                        "EXEC_DEFAULT", directory=str(dgm_tifs[0].parent))
+                _try("terrain (raw TIFs)", _terrain_raw)
+            elif dgm5_zips:
+                def _terrain_dgm5():
+                    bpy.ops.blender_tools.import_dgm5_zip(
+                        "EXEC_DEFAULT", directory=str(dgm5_zips[0].parent))
+                _try("terrain (DGM5)", _terrain_dgm5)
+
+        # ------------------------------------------------------------------
+        # 2. Ortho drape — detect pre-processed UDIM dir vs raw DOP tiles
+        # ------------------------------------------------------------------
+        udim_dir = directory / "ortho_udim"
+        has_preproc_udim = udim_dir.is_dir() and any(udim_dir.glob("ortho.*.jpg"))
+
+        terrain_obj = _find_terrain(context)
+        if terrain_obj:
+            if has_preproc_udim:
+                def _ortho_preproc():
+                    terrain_setup.apply_ortho_drape(terrain_obj, str(udim_dir))
+                    context.scene["ortho_dir"] = str(udim_dir)
+                _try("ortho (pre-processed UDIM)", _ortho_preproc)
+            else:
+                tifs = sorted(directory.rglob("*.tif")) + sorted(directory.rglob("*.tiff"))
+                dop_tifs = [t for t in tifs
+                            if any(k in str(t).lower() for k in ("dop", "ortho"))]
+                if not dop_tifs:
+                    large = [t for t in tifs if t.stat().st_size >= 20_000_000]
+                    dop_tifs = large
+                if dop_tifs:
+                    def _ortho_raw():
+                        bpy.ops.blender_tools.import_ortho(
+                            "EXEC_DEFAULT", directory=str(dop_tifs[0].parent))
+                    _try("ortho (raw DOP)", _ortho_raw)
+
+        # ------------------------------------------------------------------
+        # 3. Buildings
+        # ------------------------------------------------------------------
+        cityjsons = sorted(directory.rglob("*.cityjson"))
+        gmls = sorted(directory.rglob("*.gml")) + sorted(directory.rglob("*.xml"))
+        building_file = cityjsons[0] if cityjsons else (gmls[0] if gmls else None)
+        if building_file:
+            def _buildings():
+                bpy.ops.blender_tools.import_buildings(
+                    "EXEC_DEFAULT", filepath=str(building_file))
+            _try("buildings", _buildings)
+
+        # ------------------------------------------------------------------
+        # 4. Building textures
+        # ------------------------------------------------------------------
+        if self.building_textures and _find_buildings(context):
+            def _bld_tex():
+                bpy.ops.blender_tools.apply_building_textures("EXEC_DEFAULT")
+            _try("building textures", _bld_tex)
+
+        # ------------------------------------------------------------------
+        # 5. Sky + quality
+        # ------------------------------------------------------------------
+        _try("sky", lambda: bpy.ops.blender_tools.apply_sky_preset(
+            "EXEC_DEFAULT", preset=self.sky_preset))
+        _try("quality", lambda: bpy.ops.blender_tools.apply_quality(
+            "EXEC_DEFAULT", preset=self.quality))
+
+        # ------------------------------------------------------------------
+        # 6. Ground shader
+        # ------------------------------------------------------------------
+        if _find_terrain(context):
+            _try("ground shader",
+                 lambda: bpy.ops.blender_tools.apply_ground_shader("EXEC_DEFAULT"))
+
+        # ------------------------------------------------------------------
+        # 7. Trees — auto-detect forest mask
+        # ------------------------------------------------------------------
+        if self.trees and _find_terrain(context):
+            def _trees():
+                mask_path = ""
+                # Prefer pre-computed forest_mask.tif in the folder.
+                candidate = directory / "forest_mask.tif"
+                if candidate.is_file():
+                    mask_path = str(candidate)
+                elif not mask_path:
+                    # Try to derive from land_use.geojson + GDAL if heightmap present.
+                    lu_geojson = directory / "land_use.geojson"
+                    if lu_geojson.is_file() and heightmap_path.is_file():
+                        try:
+                            from . import geo_import as _gi
+                            mask_out = str(directory / "forest_mask.tif")
+                            _gi.rasterize_forest_mask(
+                                str(lu_geojson), str(heightmap_path), mask_out)
+                            mask_path = mask_out
+                        except Exception as e:
+                            self.report({"WARNING"}, f"Forest mask generation failed: {e}")
+                bpy.ops.blender_tools.scatter_trees(
+                    "EXEC_DEFAULT", mask_geotiff=mask_path)
+            _try("trees", _trees)
+
+        # ------------------------------------------------------------------
+        # 8. Groundcover (optional)
+        # ------------------------------------------------------------------
+        if self.groundcover and _find_terrain(context):
+            _try("groundcover",
+                 lambda: bpy.ops.blender_tools.scatter_groundcover("EXEC_DEFAULT"))
+
+        # ------------------------------------------------------------------
+        # 9. Clouds
+        # ------------------------------------------------------------------
+        if self.clouds:
+            def _clouds():
+                bpy.ops.blender_tools.add_clouds(
+                    "EXEC_DEFAULT", coverage=self.cloud_coverage)
+            _try("clouds", _clouds)
+
+        # ------------------------------------------------------------------
+        # 10. Camera — prefer flight_path.csv if present
+        # ------------------------------------------------------------------
+        def _camera():
+            csv_path = directory / "flight_path.csv"
+            if csv_path.is_file():
+                bpy.ops.blender_tools.import_csv_path(
+                    "EXEC_DEFAULT", filepath=str(csv_path),
+                    name="FlightPath")
+                bpy.ops.blender_tools.setup_camera_rig("EXEC_DEFAULT")
+            else:
+                if not context.scene.camera:
+                    bpy.ops.object.camera_add()
+                    context.scene.camera = context.active_object
+                bpy.ops.blender_tools.apply_camera_preset(
+                    "EXEC_DEFAULT", preset=self.camera_preset)
+        _try("camera", _camera)
+
+        warn_str = f" ({len(steps_warn)} warning(s))" if steps_warn else ""
+        self.report({"INFO"}, f"Scene built: {', '.join(steps_done)}{warn_str}")
+        return {"FINISHED"}
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
+
+
+def _auto_subdivisions(
+    size: tuple[float, float],
+    meta: dict,
+) -> int:
+    import math
+    max_dim_m = max(size[0], size[1])
+    pixel_res = min(meta["pixel_x"], meta["pixel_y"])
+    vertices_needed = max_dim_m / pixel_res
+    return max(6, min(14, int(math.ceil(math.log2(vertices_needed)))))
+
+
 class BLENDERTOOLS_OT_render_preview(bpy.types.Operator):
     """Set quality to preview and render the active camera."""
 
@@ -1068,17 +1321,39 @@ class BLENDERTOOLS_PT_quick_actions(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
     bl_category = "OpenMap"
+    bl_order = 0  # show first in the OpenMap tab
 
     def draw(self, context):
-        col = self.layout.column(align=True)
-        col.operator("blender_tools.quick_scene_from_folder", icon=_icon("WORLD"))
-        col.operator("blender_tools.render_preview", icon=_icon("RENDER_STILL"))
+        layout = self.layout
+
+        # Big primary button — the one-stop scene builder.
+        layout.operator(
+            "blender_tools.build_cinematic_scene",
+            text="Build Cinematic Scene from Folder",
+            icon=_icon("WORLD"),
+        )
+        layout.separator()
+
+        col = layout.column(align=True)
+        col.label(text="Individual steps:")
+        col.operator("blender_tools.import_heightmap",    icon=_icon("MESH_GRID"),     text="Import Heightmap")
+        col.operator("blender_tools.import_ortho",        icon=_icon("IMAGE_DATA"),    text="Import Orthophoto")
+        col.operator("blender_tools.import_buildings",    icon=_icon("HOME"),          text="Import Buildings")
+        col.operator("blender_tools.apply_building_textures", icon=_icon("MATERIAL"), text="Texture Buildings")
         col.separator()
-        col.operator("blender_tools.full_pipeline", icon=_icon("PLAY"))
+        col.operator("blender_tools.scatter_trees",       icon=_icon("OUTLINER_OB_FORCE_FIELD"), text="Scatter Trees")
+        col.operator("blender_tools.add_clouds",          icon=_icon("VOLUME_DATA"),   text="Add Clouds")
+        col.operator("blender_tools.apply_sky_preset",    icon=_icon("LIGHT_SUN"),     text="Apply Sky")
+        col.operator("blender_tools.apply_camera_preset", icon=_icon("CAMERA_DATA"),   text="Apply Camera")
+        col.operator("blender_tools.apply_quality",       icon=_icon("RENDERLAYERS"),  text="Apply Quality")
+        col.separator()
+        col.operator("blender_tools.render_preview",      icon=_icon("RENDER_STILL"),  text="Render Preview")
+        col.separator()
+        col.operator("blender_tools.full_pipeline",       icon=_icon("PLAY"),          text="Full Pipeline (External)")
 
         scene = context.scene
         if scene.get("utm32n_anchor"):
-            box = col.box()
+            box = layout.box()
             a = scene["utm32n_anchor"]
             box.label(text=f"Anchor: {a[0]:.0f} E, {a[1]:.0f} N", icon=_icon("PIVOT_CURSOR"))
             if scene.get("terrain_object_name"):
@@ -1158,6 +1433,7 @@ CLASSES = (
     BLENDERTOOLS_OT_attach_to_path,
     # Quick Actions
     BLENDERTOOLS_OT_quick_scene_from_folder,
+    BLENDERTOOLS_OT_build_cinematic_scene,
     BLENDERTOOLS_OT_render_preview,
     BLENDERTOOLS_OT_full_pipeline,
     # Tools
