@@ -612,6 +612,68 @@ class BLENDERTOOLS_OT_add_domain_cube(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class BLENDERTOOLS_OT_add_clouds(bpy.types.Operator):
+    """Add procedural volumetric cloud layer (cumulus + optional cirrus)."""
+
+    bl_idname = "blender_tools.add_clouds"
+    bl_label = "Add Clouds"
+    bl_options = {"REGISTER", "UNDO"}
+
+    coverage: FloatProperty(
+        name="Coverage", default=0.45, min=0.0, max=1.0,
+        description="Fraction of sky covered (0=clear, 1=overcast)",
+    )
+    base_altitude_m: FloatProperty(
+        name="Base altitude (m)", default=2300.0, min=0.0,
+        description="Scene-local Z of the cloud-deck bottom in metres",
+    )
+    thickness_m: FloatProperty(
+        name="Thickness (m)", default=600.0, min=50.0,
+        description="Vertical extent of the cumulus deck",
+    )
+    density: FloatProperty(
+        name="Density", default=0.06, min=0.001, max=2.0,
+        description="Volume scatter density scalar",
+    )
+    detail: FloatProperty(
+        name="Detail", default=0.5, min=0.0, max=1.0,
+        description="Fine-detail noise weight (0=smooth blobs, 1=fluffy edges)",
+    )
+    wind_dir_deg: FloatProperty(
+        name="Wind direction (°)", default=0.0, min=0.0, max=360.0,
+        description="Static wind offset direction in degrees",
+    )
+    cirrus: BoolProperty(
+        name="Cirrus", default=True,
+        description="Add a thin high-altitude cirrus layer",
+    )
+    cirrus_altitude_m: FloatProperty(
+        name="Cirrus altitude (m)", default=6500.0, min=1000.0,
+        description="Scene-local Z of the cirrus layer bottom",
+    )
+
+    def execute(self, context):
+        from .features import clouds
+
+        ctx = _build_feature_context(context)
+        result = clouds.apply(
+            ctx,
+            coverage=self.coverage,
+            base_altitude_m=self.base_altitude_m,
+            thickness_m=self.thickness_m,
+            density=self.density,
+            detail=self.detail,
+            wind_dir_deg=self.wind_dir_deg,
+            cirrus=self.cirrus,
+            cirrus_altitude_m=self.cirrus_altitude_m,
+        )
+        names = [result.get("cumulus_object", "")]
+        if result.get("cirrus_object"):
+            names.append(result["cirrus_object"])
+        self.report({"INFO"}, f"Clouds added: {', '.join(n for n in names if n)}")
+        return {"FINISHED"}
+
+
 # ---------------------------------------------------------------------------
 # Camera Operators
 # ---------------------------------------------------------------------------
@@ -982,6 +1044,7 @@ class BLENDERTOOLS_PT_scene_setup(bpy.types.Panel):
         col.operator("blender_tools.scatter_trees", icon=_icon("OUTLINER_OB_FORCE_FIELD"))
         col.operator("blender_tools.scatter_groundcover", icon=_icon("OUTLINER_DATA_CURVES"))
         col.operator("blender_tools.add_domain_cube", icon=_icon("MOD_FLUID"))
+        col.operator("blender_tools.add_clouds", icon=_icon("VOLUME_DATA"))
 
 
 class BLENDERTOOLS_PT_camera(bpy.types.Panel):
@@ -1088,6 +1151,7 @@ CLASSES = (
     BLENDERTOOLS_OT_scatter_trees,
     BLENDERTOOLS_OT_scatter_groundcover,
     BLENDERTOOLS_OT_add_domain_cube,
+    BLENDERTOOLS_OT_add_clouds,
     # Camera
     BLENDERTOOLS_OT_apply_camera_preset,
     BLENDERTOOLS_OT_setup_camera_rig,

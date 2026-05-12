@@ -178,3 +178,41 @@ def test_import_dommesh_operator_registered():
     assert "BLENDERTOOLS_OT_import_dommesh" in classes_src.split("CLASSES = (")[1].split(")")[0], (
         "BLENDERTOOLS_OT_import_dommesh not listed in CLASSES tuple"
     )
+
+
+def test_add_clouds_operator_registered():
+    """BLENDERTOOLS_OT_add_clouds must be defined and listed in CLASSES (AST, no bpy)."""
+    import ast
+
+    ops_path = Path(__file__).resolve().parent.parent / "operators.py"
+    src = ops_path.read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    class_names = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)}
+    assert "BLENDERTOOLS_OT_add_clouds" in class_names, (
+        "BLENDERTOOLS_OT_add_clouds class not found in operators.py"
+    )
+
+    classes_block = src.split("CLASSES = (")[1].split(")")[0]
+    assert "BLENDERTOOLS_OT_add_clouds" in classes_block, (
+        "BLENDERTOOLS_OT_add_clouds not listed in CLASSES tuple"
+    )
+
+
+def test_clouds_feature_has_NAME_and_apply():
+    """features/clouds.py must expose NAME='clouds' and an apply() callable."""
+    import sys
+    from pathlib import Path as _Path
+
+    feat_pkg_path = _Path(__file__).resolve().parent.parent / "features"
+    assert (feat_pkg_path / "clouds.py").exists(), "features/clouds.py is missing"
+
+    sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+    for k in list(sys.modules):
+        if k.startswith("features"):
+            del sys.modules[k]
+    import features  # type: ignore
+
+    found = features.discover()
+    assert "clouds" in found, f"'clouds' not in discovered features; got: {list(found)}"
+    assert callable(found["clouds"].apply), "clouds.apply must be callable"
