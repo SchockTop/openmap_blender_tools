@@ -366,10 +366,6 @@ class BLENDERTOOLS_OT_import_dommesh(bpy.types.Operator):
     filepath: StringProperty(subtype="FILE_PATH")
     filter_glob: StringProperty(default="*.glb", options={"HIDDEN"})
 
-    def invoke(self, context, event):
-        context.window_manager.fileselect_add(self)
-        return {"RUNNING_MODAL"}
-
     def execute(self, context):
         from . import dommesh_import
 
@@ -389,6 +385,10 @@ class BLENDERTOOLS_OT_import_dommesh(bpy.types.Operator):
         else:
             self.report({"INFO"}, f"Imported {n} DOM-Mesh object(s).")
         return {"FINISHED"}
+
+    def invoke(self, context, event):
+        context.window_manager.fileselect_add(self)
+        return {"RUNNING_MODAL"}
 
 
 class BLENDERTOOLS_OT_import_vdb_cloud(bpy.types.Operator):
