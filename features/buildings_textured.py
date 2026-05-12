@@ -164,16 +164,36 @@ def _make_roof_material(bpy, bbox, ortho_dir):
     # (the MULTIPLY against a white-ish missing texture still works).
     if ortho_dir:
         from pathlib import Path
-        tiles = sorted(Path(ortho_dir).glob("ortho.*.jpg"))
-        if tiles:
-            img = bpy.data.images.load(str(tiles[0]), check_existing=True)
-            img.source = "TILED"
-            for t in tiles[1:]:
-                udim = int(t.stem.split(".")[1])
-                try:
-                    img.tiles.new(tile_number=udim, label=t.name)
-                except Exception:
-                    pass
+        od = Path(ortho_dir)
+        udim_token = str(od.resolve() / "ortho.<UDIM>.jpg")
+        # Reuse existing UDIM image datablock if already loaded (terrain setup
+        # may have loaded it first); otherwise load via <UDIM> token path so
+        # Cycles can resolve all tiles at render time. Never load tile 1001
+        # alone — that leaves source='SINGLE' and Cycles sees an empty filename.
+        img = None
+        for existing in bpy.data.images:
+            if (existing.source == "TILED"
+                    and "ortho" in existing.name.lower()
+                    and "<UDIM>" in existing.filepath):
+                img = existing
+                break
+        if img is None:
+            tiles = sorted(od.glob("ortho.*.jpg"))
+            if tiles:
+                img = bpy.data.images.load(udim_token, check_existing=False)
+                img.colorspace_settings.name = "sRGB"
+                img.source = "TILED"
+                if hasattr(img, "tiles"):
+                    existing_nums = {t.number for t in img.tiles}
+                    for t in tiles:
+                        udim = int(t.stem.split(".")[1])
+                        if udim not in existing_nums:
+                            try:
+                                img.tiles.new(tile_number=udim, label=t.name)
+                                existing_nums.add(udim)
+                            except Exception:
+                                pass
+        if img is not None:
             tex.image = img
     else:
         # No DOP: bypass the multiply, use tile color directly.

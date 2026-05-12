@@ -208,17 +208,36 @@ def apply_ortho_drape(plane_obj: Any, ortho_dir: str | Path,
     u_tiles = max(u_indices) + 1
     v_tiles = max(v_indices) + 1
 
-    # Load first tile, then register the rest as UDIM tiles on the same Image.
-    first = tiles[0]
-    img = bpy.data.images.load(str(first), check_existing=True)
+    # Load the UDIM image set using the <UDIM> token path.
+    # bpy.data.images.load() with a <UDIM>-token filepath auto-detects UDIM
+    # mode in Blender 3.x+ and sets source='TILED' internally — this is the
+    # only path that correctly initialises the Cycles render-time tile lookup.
+    # Using bpy.data.images.new() + patching source/filepath afterwards leaves
+    # the image in a "Generated" state that Cycles cannot resolve at render time,
+    # producing the "Image file does not exist" error with an empty filename.
+    udim_token_path = str(ortho_dir.resolve() / "ortho.<UDIM>.jpg")
+    # Remove any stale datablock from a previous assembly run.
+    for _old in list(bpy.data.images):
+        if "ortho" in _old.name.lower():
+            bpy.data.images.remove(_old)
+    img = bpy.data.images.load(udim_token_path, check_existing=False)
+    img.colorspace_settings.name = "sRGB"
+    # Ensure source is TILED (should be auto-set by load, but belt-and-suspenders).
     img.source = "TILED"
+    # Register any tiles that weren't auto-detected by the load call.
     if hasattr(img, "tiles"):
-        for tile in tiles[1:]:
+        existing_tile_nums = {t.number for t in img.tiles}
+        for tile in tiles:
             udim = int(tile.stem.split(".")[1])
-            try:
-                img.tiles.new(tile_number=udim, label=str(tile.name))
-            except Exception:
-                pass
+            if udim not in existing_tile_nums:
+                try:
+                    img.tiles.new(tile_number=udim, label=str(tile.name))
+                    existing_tile_nums.add(udim)
+                except Exception:
+                    pass
+    print(f"[terrain_setup] ortho UDIM loaded: {img.filepath!r}, "
+          f"source={img.source}, "
+          f"tiles={len(img.tiles) if hasattr(img, 'tiles') else '?'}")
 
     # Create a separate UV layer for ortho UDIM sampling, scaled to the tile
     # grid. The original UV layer (used by the displacement modifier for
