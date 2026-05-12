@@ -1,0 +1,10 @@
+{
+ "losid": "125023_0",
+ "slpk": "https://download1.bayernwolke.de/p/dom-mesh-slpk/125023_0/DSM_Mesh.slpk",
+ "bbox_epsg25832": [689977.0, 5506729.0, 690297.0, 5507049.0],
+ "anchor_epsg25832": [689977.0, 5506729.0],
+ "leaf_nodes": 14,
+ "vertices": 35000,
+ "triangles": 11666,
+ "files": ["cutout.obj", "cutout.glb", "meta.json"]
+}
