@@ -713,7 +713,13 @@ class BLENDERTOOLS_OT_apply_camera_preset(bpy.types.Operator):
         if cam is None:
             self.report({"ERROR"}, "No active camera in scene")
             return {"CANCELLED"}
-        camera_presets.apply_camera_preset(cam, self.preset, scene=context.scene)
+        # Pass the first curve in the scene so the preset can lift it to the
+        # correct terrain-relative altitude (not just the rig empty, which a
+        # Follow Path constraint would override).
+        curves = [o for o in bpy.data.objects if o.type == "CURVE"]
+        curve = curves[0] if curves else None
+        camera_presets.apply_camera_preset(
+            cam, self.preset, scene=context.scene, curve_obj=curve)
         self.report({"INFO"}, f"Camera preset: {self.preset}")
         return {"FINISHED"}
 

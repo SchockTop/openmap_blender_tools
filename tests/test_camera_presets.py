@@ -228,3 +228,43 @@ def test_preset_altitudes_are_monotonically_distinct():
     # 1.7, 1.7, 80, 500, 2000, 4500 -- two entries share 1.7 but the rest differ
     distinct = set(alts)
     assert len(distinct) >= 5
+
+
+def test_apply_camera_preset_uses_terrain_z_from_scene_when_not_supplied(monkeypatch):
+    """When terrain_z is not supplied (defaults to None), the preset must sample
+    the scene's terrain object to get the actual terrain elevation, then add
+    altitude_agl_m on top.  This is the mountain-terrain fix — on a 750-2000 m
+    Allgäu scene an absolute Z of 800 m would bury the camera inside the peaks."""
+    from blender_tools import camera_presets
+    cam = MagicMock(); cam.type = "CAMERA"; cam.data = MagicMock()
+    rig = MagicMock(); cam.parent = rig
+    cam.animation_data = None
+
+    # Fake scene terrain max Z = 1800 m (Allgäu-ish).
+    scene = MagicMock()
+    monkeypatch.setattr(camera_presets, "_get_terrain_z_max",
+                        lambda s: 1800.0)
+    # mid-drone: altitude_agl_m = 500 → expected Z = 1800 + 500 = 2300
+    camera_presets.apply_camera_preset(cam, "mid-drone", scene=scene)
+    assert rig.location.z == 2300.0
+
+
+def test_apply_camera_preset_explicit_terrain_z_not_overridden(monkeypatch):
+    """An explicit non-zero terrain_z must NOT be replaced by scene sampling."""
+    from blender_tools import camera_presets
+    cam = MagicMock(); cam.type = "CAMERA"; cam.data = MagicMock()
+    rig = MagicMock(); cam.parent = rig
+    cam.animation_data = None
+
+    scene = MagicMock()
+    monkeypatch.setattr(camera_presets, "_get_terrain_z_max",
+                        lambda s: 9999.0)  # would be wrong if called
+    # Explicit terrain_z=520 must win.
+    camera_presets.apply_camera_preset(cam, "low-drone", scene=scene, terrain_z=520.0)
+    assert rig.location.z == 600.0  # 520 + 80
+
+
+def test_get_terrain_z_max_returns_none_without_scene():
+    """_get_terrain_z_max(None) must return None, not raise."""
+    from blender_tools.camera_presets import _get_terrain_z_max
+    assert _get_terrain_z_max(None) is None

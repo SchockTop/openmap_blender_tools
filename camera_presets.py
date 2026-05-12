@@ -120,11 +120,55 @@ def get_preset(name: str) -> dict[str, Any]:
     return CAMERA_PRESETS[name]
 
 
+def _get_terrain_z_max(scene: Any) -> float | None:
+    """Return the world-space Z maximum of the scene's terrain object, or None.
+
+    Tries to find the terrain object (via scene custom prop or name prefix),
+    then reads its evaluated bounding box to get the actual displaced Z max.
+    Returns None when no terrain is found or bpy is unavailable (e.g. in tests).
+
+    Filters out the DGM NoData sentinel (-9999) which otherwise produces a
+    spuriously low bounding-box minimum.  Any corner below -500 m is treated
+    as NoData / below sea-level noise and ignored.
+    """
+    if scene is None:
+        return None
+    try:
+        import bpy  # type: ignore[import-not-found]
+    except ImportError:
+        return None
+    try:
+        terrain_name = scene.get("terrain_object_name") if hasattr(scene, "get") else None
+        terrain_obj = (
+            bpy.data.objects.get(terrain_name) if terrain_name
+            else next(
+                (o for o in bpy.data.objects
+                 if o.type == "MESH" and o.name.startswith("Terrain")),
+                None,
+            )
+        )
+        if terrain_obj is None:
+            return None
+        # Evaluated depsgraph gives the displaced Z values.
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        evaluated = terrain_obj.evaluated_get(depsgraph)
+        bb = [evaluated.matrix_world @ __import__("mathutils").Vector(v)
+              for v in evaluated.bound_box]
+        # Filter out NoData corners (DGM nodata = -9999; any corner below -500 m
+        # is artefact, not real terrain).
+        valid_zs = [v.z for v in bb if v.z > -500.0]
+        if not valid_zs:
+            return None
+        return max(valid_zs)
+    except Exception:
+        return None
+
+
 def apply_camera_preset(camera_obj: Any,
                         preset_name: str,
                         scene: Any | None = None,
                         curve_obj: Any | None = None,
-                        terrain_z: float = 0.0) -> dict[str, Any]:
+                        terrain_z: float | None = None) -> dict[str, Any]:
     """Apply a named preset to a camera (and optionally its path curve).
 
     Args:
@@ -135,6 +179,10 @@ def apply_camera_preset(camera_obj: Any,
         curve_obj: if the camera follows a Bezier path, pass it here so we can
             update path_duration to match the preset speed (and lift altitudes).
         terrain_z: surface elevation at the path; AGL altitude is added on top.
+            When None (default) the function samples the scene's terrain object
+            to get the actual terrain elevation.  Pass an explicit float to
+            override (useful when you already know the elevation or are running
+            outside Blender without a terrain mesh).
 
     Returns the preset dict (for caller introspection / logging).
     """
@@ -147,6 +195,13 @@ def apply_camera_preset(camera_obj: Any,
     cam_data.sensor_width = p["sensor_width_mm"]
     cam_data.clip_start = 0.1 if p["altitude_agl_m"] < 50 else 1.0
     cam_data.clip_end = 100_000.0
+
+    # Resolve terrain floor: explicit value wins; otherwise sample from scene.
+    if terrain_z is None:
+        sampled = _get_terrain_z_max(scene)
+        terrain_z = sampled if sampled is not None else 0.0
+        if sampled is not None:
+            print(f"[camera-preset] terrain Z max sampled from scene: {terrain_z:.1f} m")
 
     # Lift the camera/empty-rig to the preset altitude over the terrain.
     target_z = terrain_z + p["altitude_agl_m"]
