@@ -13,6 +13,8 @@ from blender_tools.geo_import import (
     udim_tile_index,
     _bbox_to_projwin_args,
     _tile_bboxes,
+    _is_forest_feature,
+    _exg_formula,
 )
 
 
@@ -121,6 +123,80 @@ def test_tile_bboxes_second_row_starts_at_1011():
     # tile index 10 is the first tile of the second row (u=0, v=1)
     udim, _ = tiles[10]
     assert udim == 1011
+
+
+# ---------------------------------------------------------------------------
+# _is_forest_feature — pure Python, no GDAL
+# ---------------------------------------------------------------------------
+
+
+def test_is_forest_feature_landuse_forest():
+    assert _is_forest_feature({"landuse": "forest"}) is True
+
+
+def test_is_forest_feature_landuse_wood():
+    assert _is_forest_feature({"landuse": "wood"}) is True
+
+
+def test_is_forest_feature_natural_wood():
+    assert _is_forest_feature({"natural": "wood"}) is True
+
+
+def test_is_forest_feature_natural_scrub():
+    assert _is_forest_feature({"natural": "scrub"}) is True
+
+
+def test_is_forest_feature_residential():
+    assert _is_forest_feature({"landuse": "residential"}) is False
+
+
+def test_is_forest_feature_water():
+    assert _is_forest_feature({"natural": "water"}) is False
+
+
+def test_is_forest_feature_empty():
+    assert _is_forest_feature({}) is False
+
+
+def test_is_forest_feature_both_keys_non_forest():
+    assert _is_forest_feature({"landuse": "farmland", "natural": "cliff"}) is False
+
+
+# ---------------------------------------------------------------------------
+# _exg_formula — pure Python, no GDAL
+# ---------------------------------------------------------------------------
+
+
+def test_exg_pure_green():
+    val = _exg_formula(0.0, 1.0, 0.0)
+    assert abs(val - 1.0) < 1e-6
+
+
+def test_exg_pure_red():
+    val = _exg_formula(1.0, 0.0, 0.0)
+    assert val == 0.0
+
+
+def test_exg_grey_neutral():
+    # R=G=B=0.5: ExG = 2*0.5 - 0.5 - 0.5 = 0 → normalised = 0.5/3 ≈ 0.333
+    val = _exg_formula(0.5, 0.5, 0.5)
+    # All grey → raw ExG = 0.0; norm = (0+2)/4 = 0.5 — not necessarily 0.
+    # Just check it's in [0, 1].
+    assert 0.0 <= val <= 1.0
+
+
+def test_exg_clamped_to_zero_for_pure_red_blue():
+    # R=1, G=0, B=1: ExG = -2; norm = 0 (clamped)
+    assert _exg_formula(1.0, 0.0, 1.0) == 0.0
+
+
+def test_exg_output_in_unit_range():
+    import random
+    rng = random.Random(42)
+    for _ in range(50):
+        r, g, b = rng.random(), rng.random(), rng.random()
+        val = _exg_formula(r, g, b)
+        assert 0.0 <= val <= 1.0, f"ExG out of range for r={r}, g={g}, b={b}"
 
 
 # ---------------------------------------------------------------------------

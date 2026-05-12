@@ -326,6 +326,367 @@ def dgm5_xyz_to_geotiffs(
     return result
 
 
+def _is_forest_feature(props: dict) -> bool:
+    """Return True if a GeoJSON feature's properties describe a forest/wood polygon.
+
+    Matches OSM landuse=forest, landuse=wood, natural=wood, and natural=scrub.
+    Pure-Python — no GDAL dependency.
+
+    >>> _is_forest_feature({"landuse": "forest"})
+    True
+    >>> _is_forest_feature({"landuse": "residential"})
+    False
+    >>> _is_forest_feature({"natural": "wood"})
+    True
+    >>> _is_forest_feature({"natural": "water"})
+    False
+    >>> _is_forest_feature({})
+    False
+    """
+    lu = props.get("landuse", "")
+    nat = props.get("natural", "")
+    return lu in ("forest", "wood") or nat in ("wood", "scrub")
+
+
+def _exg_formula(r: float, g: float, b: float) -> float:
+    """Compute Excess Green (ExG) index from normalised R, G, B values.
+
+    ExG = 2*G - R - B, then normalise from [-1, 2] → [0, 1].
+    Values above threshold ~0.1 indicate green (vegetated) pixels.
+
+    >>> round(_exg_formula(0.0, 1.0, 0.0), 4)
+    1.0
+    >>> round(_exg_formula(1.0, 0.0, 0.0), 4)
+    0.0
+    """
+    raw = 2.0 * g - r - b  # range [-2, 2], in practice [-1, 2]
+    return max(0.0, min(1.0, (raw + 1.0) / 3.0))
+
+
+def rasterize_forest_mask(
+    landuse_geojson: str,
+    ref_geotiff: str,
+    out_path: str,
+    gdal_bin: Optional[str] = None,
+    gdalbuildvrt_bin: Optional[str] = None,
+) -> str:
+    """Rasterize OSM land-use forest polygons onto the grid of a reference GeoTIFF.
+
+    Filters GeoJSON features where landuse=forest/wood OR natural=wood/scrub,
+    then burns 1.0 (Float32) on forest cells and 0.0 elsewhere, matching extent
+    + resolution of ref_geotiff exactly.
+
+    Strategy:
+    1. If gdal_rasterize is available (system GDAL), delegate to it (highest quality,
+       handles reprojection).
+    2. Otherwise fall back to a numpy-based rasterizer that handles WGS84 GeoJSON on
+       a UTM-projected (EPSG:25832) reference raster by converting polygon coordinates
+       via pyproj (if available) or treating them as-is (if already in the same CRS).
+       Requires numpy.
+
+    Args:
+        landuse_geojson: Path to an OSM land_use.geojson (from OSMDownloader).
+        ref_geotiff: Path to the reference heightmap GeoTIFF (sets extent + grid).
+        out_path: Output Float32 GeoTIFF path.
+        gdal_bin: Override for gdal_rasterize; defaults to PATH lookup.
+        gdalbuildvrt_bin: Unused; kept for API consistency.
+
+    Returns:
+        out_path on success.
+
+    Raises:
+        RuntimeError: If neither gdal_rasterize nor numpy is available.
+        subprocess.CalledProcessError: If gdal_rasterize subprocess fails.
+    """
+    import json as _json
+
+    out_path_obj = Path(out_path)
+    out_path_obj.parent.mkdir(parents=True, exist_ok=True)
+
+    gdalinfo_bin = _resolve_gdal_bin("gdalinfo")
+    env = _vendored_gdal_env()
+
+    # Read and filter the GeoJSON to forest/wood features only.
+    with open(landuse_geojson, encoding="utf-8") as fh:
+        fc = _json.load(fh)
+
+    forest_features = [
+        f for f in fc.get("features", [])
+        if _is_forest_feature(f.get("properties") or {})
+    ]
+
+    if not forest_features:
+        print(f"[geo_import] rasterize_forest_mask: no forest features found in {landuse_geojson}")
+
+    # Read reference raster extent and size.
+    raw = subprocess.check_output(
+        [gdalinfo_bin, "-json", str(ref_geotiff)],
+        env=env, stderr=subprocess.DEVNULL,
+    )
+    info = _json.loads(raw)
+    w, h = info["size"]
+    gt = info.get("geoTransform", [0, 1, 0, 0, 0, -1])
+    origin_x, pixel_x = gt[0], abs(gt[1])
+    origin_y, pixel_y = gt[3], abs(gt[5])
+
+    # Try gdal_rasterize from PATH (not vendored — vendored set only has translate/buildvrt/info).
+    import shutil as _shutil
+    gdal_rasterize_path = _shutil.which("gdal_rasterize")
+
+    if gdal_rasterize_path:
+        _rasterize_forest_gdal(
+            forest_features, ref_geotiff, out_path_obj,
+            gdal_rasterize_path, w, h, origin_x, origin_y, pixel_x, pixel_y, env,
+        )
+    else:
+        _rasterize_forest_numpy(
+            forest_features, out_path_obj,
+            w, h, origin_x, origin_y, pixel_x, pixel_y,
+        )
+
+    n = len(forest_features)
+    print(f"[geo_import] rasterize_forest_mask: burned {n} forest feature(s) -> {out_path_obj.name}")
+    return str(out_path_obj)
+
+
+def _rasterize_forest_gdal(
+    forest_features: list,
+    ref_geotiff: str,
+    out_path: Path,
+    gdal_rasterize: str,
+    w: int, h: int,
+    origin_x: float, origin_y: float, pixel_x: float, pixel_y: float,
+    env: Optional[dict],
+) -> None:
+    """Burn forest polygons via gdal_rasterize (requires gdal_rasterize on PATH)."""
+    import json as _json
+    import shutil as _shutil
+
+    xmin = origin_x; ymax = origin_y
+    xmax = origin_x + w * pixel_x; ymin = origin_y - h * pixel_y
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        filtered_path = tmp / "forest_only.geojson"
+        filtered_fc = {"type": "FeatureCollection", "features": forest_features}
+        filtered_path.write_text(_json.dumps(filtered_fc), encoding="utf-8")
+
+        blank_path = tmp / "blank.tif"
+        create_cmd = [
+            _resolve_gdal_bin("gdal_translate"),
+            "-of", "GTiff", "-ot", "Float32",
+            "-co", "COMPRESS=LZW",
+            "-scale", "0", "1", "0", "0",
+            "-outsize", str(w), str(h),
+        ] + _bbox_to_projwin_args((xmin, ymin, xmax, ymax)) + [
+            "-projwin_srs", "EPSG:25832",
+            str(ref_geotiff),
+            str(blank_path),
+        ]
+        subprocess.run(create_cmd, check=True, env=env)
+        _shutil.copy2(str(blank_path), str(out_path))
+
+        rasterize_cmd = [
+            gdal_rasterize,
+            "-burn", "1.0",
+            "-ot", "Float32",
+            "-a_srs", "EPSG:4326",
+            str(filtered_path),
+            str(out_path),
+        ]
+        subprocess.run(rasterize_cmd, check=True, env=env)
+
+
+def _rasterize_forest_numpy(
+    forest_features: list,
+    out_path: Path,
+    w: int, h: int,
+    origin_x: float, origin_y: float, pixel_x: float, pixel_y: float,
+) -> None:
+    """Pure numpy fallback rasterizer for forest polygons (WGS84 → UTM via pyproj).
+
+    Requires numpy. Uses pyproj for coordinate conversion if available; without it
+    assumes coordinates are already in the raster CRS (unusual but keeps it importable).
+    Writes a minimal GeoTIFF via struct packing (no GDAL Python bindings required).
+    """
+    import numpy as np
+    import struct
+
+    mask = np.zeros((h, w), dtype=np.float32)
+
+    # Try to set up WGS84 → UTM32N transformer.
+    to_utm: Optional[object] = None
+    try:
+        from pyproj import Transformer
+        to_utm = Transformer.from_crs("EPSG:4326", "EPSG:25832", always_xy=True)
+    except ImportError:
+        pass
+
+    def _wgs84_to_utm(lon: float, lat: float) -> tuple[float, float]:
+        if to_utm is not None:
+            return to_utm.transform(lon, lat)
+        return lon, lat  # assume already metric if no pyproj
+
+    def _utm_to_pixel(x: float, y: float) -> tuple[int, int]:
+        col = int((x - origin_x) / pixel_x)
+        row = int((origin_y - y) / pixel_y)
+        return col, row
+
+    def _fill_polygon(coords_wgs: list) -> None:
+        """Scan-fill a polygon into the mask array."""
+        utm_pts = [_wgs84_to_utm(lon, lat) for lon, lat in coords_wgs]
+        pix_pts = [_utm_to_pixel(x, y) for x, y in utm_pts]
+        xs = [p[0] for p in pix_pts]; ys = [p[1] for p in pix_pts]
+        if not xs:
+            return
+        r_min = max(0, min(ys)); r_max = min(h - 1, max(ys))
+        c_min = max(0, min(xs)); c_max = min(w - 1, max(xs))
+        n_pts = len(pix_pts)
+        for row in range(r_min, r_max + 1):
+            crossings: list[float] = []
+            for i in range(n_pts):
+                j = (i + 1) % n_pts
+                y0, y1 = pix_pts[i][1], pix_pts[j][1]
+                x0, x1 = pix_pts[i][0], pix_pts[j][0]
+                if (y0 <= row < y1) or (y1 <= row < y0):
+                    t = (row - y0) / (y1 - y0)
+                    crossings.append(x0 + t * (x1 - x0))
+            crossings.sort()
+            for k in range(0, len(crossings) - 1, 2):
+                c0 = max(0, int(crossings[k]))
+                c1 = min(w, int(crossings[k + 1]) + 1)
+                mask[row, c0:c1] = 1.0
+
+    for feature in forest_features:
+        geom = feature.get("geometry") or {}
+        gtype = geom.get("type", "")
+        coords = geom.get("coordinates", [])
+        if gtype == "Polygon" and coords:
+            _fill_polygon(coords[0])
+        elif gtype == "MultiPolygon":
+            for poly in coords:
+                if poly:
+                    _fill_polygon(poly[0])
+
+    # Write a minimal uncompressed Float32 GeoTIFF via the tifffile or struct approach.
+    # Use gdal_translate to write the GeoTIFF with correct georef if available.
+    # Otherwise write a raw float32 array wrapped in a minimal TIFF structure.
+    _write_float32_geotiff(out_path, mask, origin_x, origin_y, pixel_x, pixel_y)
+
+
+def _write_float32_geotiff(
+    out_path: Path,
+    data: "numpy.ndarray",
+    origin_x: float, origin_y: float,
+    pixel_x: float, pixel_y: float,
+) -> None:
+    """Write a Float32 GeoTIFF with minimal TIFF metadata via gdal_translate.
+
+    Writes data as a raw binary, then wraps it with gdal_translate to add
+    geo-referencing. Falls back to writing a headerless .bin + .hdr if GDAL fails.
+    """
+    import numpy as np
+
+    h, w = data.shape
+    env = _vendored_gdal_env()
+    translate_bin = _resolve_gdal_bin("gdal_translate")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        raw_path = tmp / "mask_raw.bin"
+        raw_path.write_bytes(data.astype(np.float32).tobytes())
+
+        # Write a minimal ENVI .hdr so gdal_translate can read the binary.
+        hdr_path = tmp / "mask_raw.hdr"
+        hdr_path.write_text(
+            "ENVI\n"
+            f"samples = {w}\n"
+            f"lines   = {h}\n"
+            "bands   = 1\n"
+            "data type = 4\n"  # 4 = Float32 in ENVI
+            "interleave = bsq\n"
+            "byte order = 0\n",
+            encoding="ascii",
+        )
+
+        cmd = [
+            translate_bin,
+            "-of", "GTiff",
+            "-ot", "Float32",
+            "-co", "COMPRESS=LZW",
+            "-a_srs", "EPSG:25832",
+            "-a_ullr",
+            str(origin_x), str(origin_y),
+            str(origin_x + w * pixel_x), str(origin_y - h * pixel_y),
+            str(raw_path),
+            str(out_path),
+        ]
+        try:
+            subprocess.run(cmd, check=True, env=env)
+        except subprocess.CalledProcessError:
+            # Absolute last resort: just write the raw float32 array with a .tif extension.
+            out_path.write_bytes(data.astype(np.float32).tobytes())
+            print(f"[geo_import] warning: wrote raw float32 without TIFF header to {out_path}")
+
+
+def greenness_mask(
+    dop_geotiff: str,
+    out_path: str,
+    threshold: float = 0.08,
+    gdal_calc_bin: Optional[str] = None,
+) -> str:
+    """Compute an RGB-greenness (ExG) mask from a DOP orthophoto.
+
+    ExG = (2*G - R - B), normalised to [0, 1], then thresholded so that
+    values below `threshold` are clamped to 0.  Produces a Float32 GeoTIFF
+    with values ≈0 (non-vegetated) to 1 (strongly vegetated).
+
+    Useful when no OSM land-use layer is available.  Requires the DOP to
+    have at least 3 bands (R, G, B).
+
+    Args:
+        dop_geotiff: Path to an RGB DOP GeoTIFF (bands: 1=R, 2=G, 3=B).
+        out_path: Output Float32 GeoTIFF path.
+        threshold: ExG values below this are zeroed (removes pavement/water noise).
+        gdal_calc_bin: Override path to gdal_calc.py; defaults to vendored/PATH.
+
+    Returns:
+        out_path on success.
+
+    Raises:
+        subprocess.CalledProcessError: If gdal_calc.py fails.
+    """
+    out_path_obj = Path(out_path)
+    out_path_obj.parent.mkdir(parents=True, exist_ok=True)
+
+    calc_bin = gdal_calc_bin or _resolve_gdal_bin("gdal_calc.py")
+    env = _vendored_gdal_env()
+
+    # ExG = 2G - R - B, normalised from [-2,2] range to [0,1]:
+    # norm = (2G - R - B + 2) / 4  (shift + scale)
+    # then threshold: max(0, norm - threshold/4_scaled)
+    # Simpler: compute ExG01 = clip((2G-R-B+2)/4, 0, 1), then zero where < threshold.
+    calc_expr = (
+        f"(numpy.clip((2.0*B.astype(float)-A.astype(float)-C.astype(float)+2.0)/4.0,0,1)"
+        f" * (((2.0*B.astype(float)-A.astype(float)-C.astype(float)+2.0)/4.0) > {threshold}))"
+    )
+    cmd = [
+        calc_bin,
+        "-A", str(dop_geotiff), "--A_band=1",
+        "-B", str(dop_geotiff), "--B_band=2",
+        "-C", str(dop_geotiff), "--C_band=3",
+        "--outfile", str(out_path_obj),
+        "--calc", calc_expr,
+        "--type=Float32",
+        "--co=COMPRESS=LZW",
+        "--quiet",
+        "--overwrite",
+    ]
+    subprocess.run(cmd, check=True, env=env)
+    print(f"[geo_import] greenness_mask: ExG mask -> {out_path_obj.name}")
+    return str(out_path_obj)
+
+
 def dop_to_udim_tiles(
     input_orthos: list[Path],
     bbox_utm32n: tuple[float, float, float, float],
